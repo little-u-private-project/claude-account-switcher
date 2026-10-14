@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Accounts</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Claude Accounts</h1>
+      <button id="add" class="primary">Add account</button>
+    </header>
+    <main id="list"></main>
+    <p class="hint">Click an account to open it. Code-tab sessions are shared by every account. Closing this window keeps the app in the tray so hotkeys keep working.</p>
+    <label class="hint toggle"><input type="checkbox" id="autostart" /> Start at login (hidden in the tray)</label>
+    <div id="toast" hidden></div>
+
+    <dialog id="dialog">
+      <form method="dialog">
+        <h2 id="d-title"></h2>
+        <p id="d-text"></p>
+        <input id="d-input" autocomplete="off" spellcheck="false" />
+        <div class="actions">
+          <button id="d-cancel" value="cancel">Cancel</button>
+          <button id="d-ok" value="ok" class="primary">OK</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -6,3 +6,8 @@ node_modules/
 .claude/
 .claude-tools/
 .claude-accounts/
+
+# Claude Accounts app build output
+app/dist/
+app/src-tauri/target/
+app/src-tauri/gen/

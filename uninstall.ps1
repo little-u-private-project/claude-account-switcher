@@ -1,57 +1,61 @@
 <#
-    Claude Account Switcher - uninstaller
+    Claude Account Switcher - uninstaller (Claude Code CLI switcher, plus any
+    leftovers of the retired desktop switcher / WinForms app)
 
-    One-line uninstall:
-      irm https://raw.githubusercontent.com/karthiknl0/claude-account-switcher/main/uninstall.ps1 | iex
+      .\uninstall.ps1
 
-    Removes the scripts, the tray app, the Desktop shortcuts, and the added
-    functions from your PowerShell profiles. Does NOT touch your saved accounts
-    (~/.claude-accounts) or the concurrent-mode state (~/.claude-instances), or
-    your Claude login. Remove those manually if you want:
+    The Claude Accounts app has its own uninstaller (Windows: Settings > Apps;
+    macOS: drag it to the Trash).
+
+    Does NOT touch your saved accounts (~/.claude-accounts), the shared session
+    list (~/.claude-instances), or your Claude login. Remove those manually if
+    you want - but each account folder holds that account's whole signed-in
+    Claude Desktop profile:
       Remove-Item -Recurse -Force ~/.claude-accounts, ~/.claude-instances
 #>
 
 Write-Host "Removing Claude Account Switcher..." -ForegroundColor Cyan
 
-# 1. Tools dir (includes claude-instance-start.ps1/claude-instance-stop.ps1)
-$ToolsDir = Join-Path $env:USERPROFILE '.claude-tools'
+$ToolsDir = Join-Path $HOME '.claude-tools'
 if (Test-Path $ToolsDir) { Remove-Item -Recurse -Force $ToolsDir; Write-Host " - removed $ToolsDir" }
 
-# 1b. Claude Accounts app (concurrent multi-instance GUI) - close it if
-#     running, remove its build output. Leaves ~/.claude-accounts and
-#     ~/.claude-instances alone, same "don't touch saved accounts" policy as
-#     the rest of this uninstaller.
-Get-Process -Name 'ClaudeAccountTray' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-$trayDir = Join-Path $env:LOCALAPPDATA 'ClaudeAccountTray'
-if (Test-Path $trayDir) { Remove-Item -Recurse -Force $trayDir; Write-Host " - removed $trayDir" }
-$trayLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Claude Accounts.lnk'
-if (Test-Path $trayLnk) { Remove-Item -Force $trayLnk; Write-Host " - removed Claude Accounts Desktop shortcut" }
+$beginMark = '# >>> claude-account-switcher >>>'
+$endMark   = '# <<< claude-account-switcher <<<'
+$pattern   = [Regex]::Escape($beginMark) + '.*?' + [Regex]::Escape($endMark)
 
-# 2. Desktop shortcut
-$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Claude Switch Account.lnk'
-if (Test-Path $lnk) { Remove-Item -Force $lnk; Write-Host " - removed Desktop shortcut" }
-
-# 3. Functions from both profiles
-$docs = [Environment]::GetFolderPath('MyDocuments')
-$profiles = @(
-    (Join-Path $docs 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'),
-    (Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1')
-)
-foreach ($pf in $profiles) {
-    if (-not (Test-Path $pf)) { continue }
-    $lines = Get-Content $pf
-    $out = New-Object System.Collections.Generic.List[string]
-    $skip = $false
-    foreach ($line in $lines) {
-        if ($line -match '^\s*#\s*Claude desktop account switcher') { $skip = $true; continue }
-        if ($skip -and $line -match '^\s*function\s+claude-(switch|add)-account') { continue }
-        if ($skip -and $line -match '^\s*&\s') { continue }
-        if ($skip -and $line -match '^\s*\}') { continue }
-        if ($skip -and $line.Trim() -eq '') { $skip = $false; continue }
-        $out.Add($line)
+$onWindows = -not (Test-Path variable:IsWindows) -or $IsWindows
+if ($onWindows) {
+    Get-Process -Name 'ClaudeAccountTray' -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Kill(); $_.WaitForExit(5000) | Out-Null }
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $gone = @((Join-Path $env:LOCALAPPDATA 'ClaudeAccountTray')) +
+        (@('Claude Switch Account.lnk', 'Claude Code Switch.lnk', 'Claude Code.lnk', 'Claude Code Resume.lnk', 'Claude Code Continue.lnk') |
+            ForEach-Object { Join-Path $desktop $_ })
+    # 'Claude Accounts.lnk' may be the new app's own shortcut - only the old one goes.
+    $oldLnk = Join-Path $desktop 'Claude Accounts.lnk'
+    if ((Test-Path $oldLnk) -and (New-Object -ComObject WScript.Shell).CreateShortcut($oldLnk).TargetPath -like '*ClaudeAccountTray*') { $gone += $oldLnk }
+    foreach ($p in $gone) {
+        if (-not (Test-Path $p)) { continue }
+        try { Remove-Item -Recurse -Force $p -ErrorAction Stop; Write-Host " - removed $p" }
+        catch { Write-Host " - could not remove $p - delete it by hand ($($_.Exception.Message))" -ForegroundColor Yellow }
     }
-    Set-Content -Path $pf -Value $out -Encoding UTF8
-    Write-Host " - cleaned $pf"
+
+    $docs = [Environment]::GetFolderPath('MyDocuments')
+    $rcFiles = @(
+        (Join-Path $docs 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'),
+        (Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1')
+    )
+} else {
+    $rcFiles = @((Join-Path $HOME '.bashrc'), (Join-Path $HOME '.zshrc'))
 }
 
-Write-Host "Done. Open a new PowerShell window for changes to take effect." -ForegroundColor Green
+foreach ($rc in $rcFiles) {
+    if (-not (Test-Path $rc)) { continue }
+    $c = Get-Content $rc -Raw
+    if ($null -eq $c -or $c -notmatch [Regex]::Escape($beginMark)) { continue }
+    $c = [Regex]::Replace($c, $pattern, '', 'Singleline').TrimEnd() + [Environment]::NewLine
+    [System.IO.File]::WriteAllText($rc, $c, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host " - cleaned $rc"
+}
+
+Write-Host "Done. Open a new terminal for changes to take effect." -ForegroundColor Green
