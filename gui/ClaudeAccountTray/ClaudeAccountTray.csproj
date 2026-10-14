@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>ClaudeAccountTray</RootNamespace>
+    <AssemblyName>ClaudeAccountTray</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <!-- JavaScriptSerializer for instances.json - ships with .NET Framework,
+         no NuGet/Newtonsoft download needed (matches: no network calls at
+         build or run time, same principle as install.ps1's no-auto-pull). -->
+    <Reference Include="System.Web.Extensions" />
+    <!-- WMI (Win32_Process.CommandLine) to find the real running instance by
+         its user-data-dir flag, instead of trusting a single captured pid. -->
+    <Reference Include="System.Management" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="TrayContext.cs" />
+    <Compile Include="HotkeyManager.cs" />
+    <Compile Include="InstanceConfig.cs" />
+    <Compile Include="SwitcherPalette.cs" />
+    <Compile Include="SwitcherPalette.Designer.cs" />
+    <Compile Include="SettingsForm.cs" />
+    <Compile Include="SettingsForm.Designer.cs" />
+    <Compile Include="AddAccountForm.cs" />
+    <Compile Include="AddAccountForm.Designer.cs" />
+    <Compile Include="Theme.cs" />
+    <Compile Include="HotkeyCaptureForm.cs" />
+    <Compile Include="HotkeyCaptureForm.Designer.cs" />
+    <Compile Include="RenameForm.cs" />
+    <Compile Include="RenameForm.Designer.cs" />
+    <Compile Include="UISettings.cs" />
+    <Compile Include="PsRunner.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
