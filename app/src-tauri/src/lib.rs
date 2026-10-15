@@ -41,10 +41,11 @@ async fn list_accounts() -> Vec<AccountView> {
 
 fn open(id: &str) -> Result<(), String> {
     let dir = store::user_data_dir(id)?;
-    if !claude::is_running(&claude::snapshot(), &dir) {
-        claude::sync_shared_sessions(&dir)?;
-    }
-    claude::launch(&dir)
+    // A failed merge only means fewer shared sessions - open the account
+    // anyway, then report it.
+    let synced = if claude::is_running(&claude::snapshot(), &dir) { Ok(()) } else { claude::sync_shared_sessions(&dir) };
+    claude::launch(&dir)?;
+    synced
 }
 
 #[tauri::command]
@@ -100,7 +101,13 @@ async fn add_poll(id: String) -> Result<Option<String>, String> {
     if !store::is_pending(&id) {
         return Err("not a pending account".into());
     }
-    let Ok(email) = token::email(&store::user_data_dir(&id)?).await else { return Ok(None) };
+    let dir = store::user_data_dir(&id)?;
+    if token::access_token(&dir).is_err() {
+        return Ok(None);
+    }
+    // Signed in: a failed lookup (offline right after login) is an error, not
+    // "not signed in" - that answer gets a leftover add's folder deleted.
+    let email = token::email(&dir).await?;
     if let Some(existing) = store::list().into_iter().find(|a| a.meta.email.eq_ignore_ascii_case(&email)) {
         let name = existing.meta.display_name.unwrap_or(existing.meta.email);
         return Err(format!("{email} is already saved ({name}) - cancel this one"));
@@ -200,6 +207,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let _ = app.autolaunch().enable();
         std::fs::create_dir_all(decided.parent().unwrap())?;
         std::fs::write(&decided, "")?;
+    } else if app.autolaunch().is_enabled().unwrap_or(false) {
+        // Re-point it at this exe: after a reinstall elsewhere, login would
+        // start the old copy (or nothing).
+        let _ = app.autolaunch().enable();
     }
 
     let show = MenuItem::with_id(app, "show", "Show Claude Accounts", true, None::<&str>)?;

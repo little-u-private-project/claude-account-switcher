@@ -6,21 +6,17 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{LazyLock, Mutex, MutexGuard};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-static PROCESSES: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(System::new()));
-
-// The app polls this every few seconds, so the table is kept and only new
-// processes get their command line read (it never changes for a process).
-// ponytail: a PID reused within one poll keeps the old command line - fine for
-// the status dot; stop() never relies on it (it reads command lines fresh).
-pub fn snapshot() -> MutexGuard<'static, System> {
-    let mut sys = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+// Fresh every time (~15 ms for ~500 processes): a kept table holds on to a
+// dead process's command line when Windows hands its PID to a new one, so a
+// stopped account kept showing "Running" (and Open skipped the session sync).
+pub fn snapshot() -> System {
+    let mut sys = System::new();
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet),
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
     );
     sys
 }
@@ -52,24 +48,14 @@ pub fn is_running(sys: &System, user_data_dir: &Path) -> bool {
 
 // Kills the instance and everything it started (Code sessions included).
 pub fn stop(user_data_dir: &Path) {
-    // Fresh, not the cached table: a stale command line on a reused PID would
-    // get an unrelated process killed.
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
-    );
+    let sys = snapshot();
     let own = pids_for(&sys, user_data_dir);
-    let has_own_ancestor = |mut pid: Pid| {
-        while let Some(parent) = sys.process(pid).and_then(|p| p.parent()) {
-            if own.contains(&parent) {
-                return true;
-            }
-            pid = parent;
-        }
-        false
-    };
+    // This app is a boundary: when it was started from one of the stopped
+    // instance's Code sessions, neither it nor the other accounts' instances
+    // it launched go down with it.
+    let me = sysinfo::get_current_pid().ok();
+    let info = |pid: Pid| (Some(pid) != me).then(|| sys.process(pid)).flatten().map(|p| (p.parent(), p.start_time()));
+    let has_own_ancestor = |pid: Pid| has_ancestor_in(pid, &own, info);
     if cfg!(target_os = "macos") {
         // Quit the app politely; it takes its helpers down with it.
         for pid in own.iter().filter(|p| !has_own_ancestor(**p)) {
@@ -84,6 +70,23 @@ pub fn stop(user_data_dir: &Path) {
             }
         }
     }
+}
+
+// Walks up the parent chain; info(pid) = (parent, start time). Windows reuses
+// a dead parent's PID, so a "parent" that started after its child is a
+// stranger - without this check Stop killed unrelated processes (this app,
+// explorer) whose dead parent's PID now belonged to the stopped instance.
+fn has_ancestor_in(mut pid: Pid, own: &HashSet<Pid>, info: impl Fn(Pid) -> Option<(Option<Pid>, u64)>) -> bool {
+    while let Some((Some(parent), started)) = info(pid) {
+        if info(parent).is_none_or(|(_, parent_started)| parent_started > started) {
+            return false;
+        }
+        if own.contains(&parent) {
+            return true;
+        }
+        pid = parent;
+    }
+    false
 }
 
 // Starts the account's instance, or - when it already runs - hands the launch
@@ -210,6 +213,24 @@ fn copy_newer(src: &Path, dst: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reused_parent_pid_is_not_an_ancestor() {
+        // pid -> (parent, start time); 1 is the stopped instance.
+        let table = std::collections::HashMap::from([
+            (1, (None, 100)),
+            (2, (Some(1), 101)), // real child
+            (3, (Some(2), 102)), // real grandchild
+            (4, (Some(5), 50)),  // its parent died, PID 5 was reused...
+            (5, (Some(1), 105)), // ...by a younger child of the instance
+            (6, (Some(99), 50)), // parent gone
+        ]);
+        let info = |p: Pid| table.get(&p.as_u32()).map(|(parent, t)| (parent.map(Pid::from_u32), *t));
+        let own = HashSet::from([Pid::from_u32(1)]);
+        let hit = |p| has_ancestor_in(Pid::from_u32(p), &own, &info);
+        assert!(hit(2) && hit(3) && hit(5));
+        assert!(!hit(4) && !hit(6) && !hit(1));
+    }
 
     #[test]
     fn sync_replaces_link_and_merges_both_ways() {

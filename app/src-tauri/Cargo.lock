@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "claude-accounts"
-version = "4.0.1"
+version = "4.0.2"
 dependencies = [
  "aes",
  "aes-gcm",

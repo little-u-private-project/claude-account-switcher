@@ -165,7 +165,8 @@ async function setHotkey(a: Account) {
     if (["Tab", "Enter", "Escape"].includes(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) return;
     e.preventDefault();
     const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
-    if (/^(Control|Alt|Shift|Meta|OS)/.test(e.code) || !mods.length) {
+    // Shift alone is not enough: a global Shift+A would swallow every capital A typed anywhere.
+    if (/^(Control|Alt|Shift|Meta|OS)/.test(e.code) || !mods.some((m) => m !== "Shift")) {
       input.value = mods.length ? mods.join("+") + "+…" : "Hold Ctrl / Alt / " + (isMac ? "Cmd" : "Win") + " and press a key";
       return;
     }
@@ -217,8 +218,8 @@ async function addAccount(resumeId?: string) {
           return;
         }
       } catch (e) {
+        // Keep polling: a network blip must not leave Cancel (which deletes) as the only way out.
         $("d-text").textContent = String(e);
-        return;
       }
     }
   })();
@@ -320,7 +321,8 @@ autostart.addEventListener("change", async () => {
 async function resumePending() {
   for (const [id, running] of (await call<[string, boolean][]>("pending_accounts")) ?? []) {
     if (running) await addAccount(id);
-    else if (!(await invoke<string | null>("add_poll", { id }).catch(() => null))) await call("add_cancel", { id });
+    // An error (offline at login, duplicate) leaves it for the next start - only a sure "not signed in" deletes.
+    else if ((await invoke<string | null>("add_poll", { id }).catch(() => undefined)) === null) await call("add_cancel", { id });
   }
 }
 
