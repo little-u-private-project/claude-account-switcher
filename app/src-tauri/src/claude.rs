@@ -156,11 +156,14 @@ fn find_exe() -> Result<PathBuf, String> {
 pub fn sync_shared_sessions(user_data_dir: &Path) -> Result<(), String> {
     let shared = crate::store::instances_dir().join("shared-code-sessions");
     fs::create_dir_all(&shared).map_err(|e| e.to_string())?;
+    let mut all_presets = vec![];
     for dir in crate::store::list().iter().filter_map(|a| crate::store::user_data_dir(&a.id).ok()) {
         for org in session_dirs(&dir).into_iter().filter(|o| !is_link(o)) {
             copy_newer(&org, &shared).map_err(|e| format!("merge {}: {e}", org.display()))?;
         }
+        all_presets.extend(presets(&dir));
     }
+    let own_presets = presets(user_data_dir);
     for org in session_dirs(user_data_dir) {
         if is_link(&org) {
             // Left by 4.0.0, which linked the folder instead of copying.
@@ -168,6 +171,57 @@ pub fn sync_shared_sessions(user_data_dir: &Path) -> Result<(), String> {
             fs::create_dir(&org).map_err(|e| e.to_string())?;
         }
         copy_newer(&shared, &org).map_err(|e| format!("fill {}: {e}", org.display()))?;
+        adopt_presets(&org, &own_presets, &all_presets).map_err(|e| format!("presets {}: {e}", org.display()))?;
+    }
+    Ok(())
+}
+
+// Saved places ("presets") in <user-data-dir>/ccd-session-presets.json, as
+// (id, target) - target is where it runs, e.g. {"kind":"local","cwd":...}.
+fn presets(user_data_dir: &Path) -> Vec<(String, serde_json::Value)> {
+    let Ok(text) = fs::read_to_string(user_data_dir.join("ccd-session-presets.json")) else { return vec![] };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };
+    json["byAccount"]
+        .as_object()
+        .into_iter()
+        .flat_map(|accounts| accounts.values())
+        .filter_map(|account| account["presets"].as_array())
+        .flatten()
+        .filter_map(|p| Some((p["id"].as_str()?.to_string(), p["target"].clone())))
+        .collect()
+}
+
+// Desktop stamps a new session with the id of the preset it was started from
+// and groups the sidebar by it, but every account gives the same folder its
+// own random preset id - so a copied session pointed at a preset this account
+// doesn't have and fell under "This PC". Point it at this account's preset
+// for the same place. The file keeps its mtime so the rewrite never looks
+// newer than the real session in the account that owns it.
+// ponytail: no preset for that place here -> left as is (still "This PC");
+// create the missing preset if that ever comes up.
+fn adopt_presets(org: &Path, own: &[(String, serde_json::Value)], all: &[(String, serde_json::Value)]) -> std::io::Result<()> {
+    for entry in fs::read_dir(org)?.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with("local_") {
+            continue;
+        }
+        let Ok(mut session) = serde_json::from_slice::<serde_json::Value>(&fs::read(entry.path())?) else { continue };
+        let mut changed = false;
+        for key in ["envScopeId", "startedFromEnvironmentId"] {
+            let Some(id) = session[key].as_str() else { continue };
+            if own.iter().any(|(own_id, _)| own_id == id) {
+                continue;
+            }
+            let Some((_, place)) = all.iter().find(|(other, _)| other == id) else { continue };
+            if let Some((own_id, _)) = own.iter().find(|(_, own_place)| own_place == place) {
+                session[key] = own_id.clone().into();
+                changed = true;
+            }
+        }
+        if changed {
+            let modified = entry.metadata()?.modified()?;
+            fs::write(entry.path(), serde_json::to_vec(&session)?)?;
+            fs::File::options().write(true).open(entry.path())?.set_modified(modified)?;
+        }
     }
     Ok(())
 }
@@ -246,7 +300,11 @@ mod tests {
             fs::write(crate::store::account_dir(id).unwrap().join("meta.json"), r#"{"email":"x"}"#).unwrap();
         }
         fs::create_dir(org("a")).unwrap();
-        fs::write(org("a").join("local_new.json"), "{}").unwrap();
+        fs::write(org("a").join("local_new.json"), r#"{"envScopeId":"pa","startedFromEnvironmentId":"builtin_local"}"#).unwrap();
+        for (id, preset) in [("a", "pa"), ("b", "pb")] {
+            let presets = format!(r#"{{"byAccount":{{"u":{{"presets":[{{"id":"{preset}","target":{{"kind":"local","cwd":"F:\\w"}}}}]}}}}}}"#);
+            fs::write(crate::store::user_data_dir(id).unwrap().join("ccd-session-presets.json"), presets).unwrap();
+        }
         #[cfg(windows)]
         Command::new("cmd").args(["/c", "mklink", "/J"]).arg(org("b")).arg(&shared).output().unwrap();
         #[cfg(unix)]
@@ -260,6 +318,11 @@ mod tests {
             assert!(org("b").join(f).exists(), "{f} missing in b");
             assert!(shared.join(f).exists(), "{f} missing in shared");
         }
+        let copied: serde_json::Value = serde_json::from_slice(&fs::read(org("b").join("local_new.json")).unwrap()).unwrap();
+        assert_eq!(copied["envScopeId"], "pb", "a's preset id not mapped to b's");
+        assert_eq!(copied["startedFromEnvironmentId"], "builtin_local");
+        let modified = |dir: PathBuf| fs::metadata(dir.join("local_new.json")).unwrap().modified().unwrap();
+        assert_eq!(modified(org("b")), modified(shared.clone()), "rewrite changed the mtime");
         fs::remove_dir_all(&home).unwrap();
     }
 }

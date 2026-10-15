@@ -1,6 +1,6 @@
 [package]
 name = "claude-accounts"
-version = "4.0.2"
+version = "4.0.3"
 description = "Keep several Claude Desktop accounts signed in, each in its own instance"
 edition = "2021"
 
