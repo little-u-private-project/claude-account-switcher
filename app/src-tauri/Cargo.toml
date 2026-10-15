@@ -1,6 +1,6 @@
 [package]
 name = "claude-accounts"
-version = "4.0.0"
+version = "4.0.1"
 description = "Keep several Claude Desktop accounts signed in, each in its own instance"
 edition = "2021"
 
@@ -24,7 +24,6 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 [target.'cfg(windows)'.dependencies]
 aes-gcm = "0.10"
-junction = "1"
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Security_Cryptography",

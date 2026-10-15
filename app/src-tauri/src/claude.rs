@@ -7,7 +7,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex, MutexGuard};
-use std::time::SystemTime;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 static PROCESSES: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(System::new()));
@@ -140,38 +139,52 @@ fn find_exe() -> Result<PathBuf, String> {
 // The Code tab's session list lives in
 // <user-data-dir>/claude-code-sessions/<account>/<org>/ as one small JSON per
 // session that only points at transcripts in ~/.claude (shared by every
-// account already). Pointing every account's list folder at one shared folder
-// makes every session visible - and resumable - from every account.
-// Must run while the instance is stopped. Each real folder is merged in
-// (newer file wins), moved to a backup, then replaced by a link.
-// ponytail: one folder for all accounts and orgs, scheduled-tasks.json too -
-// a scheduled task fires in every running instance; split per org if that bites.
-pub fn link_shared_sessions(user_data_dir: &Path) -> Result<(), String> {
+// account already). Copying every account's entries into every other
+// account's folder makes every session visible - and resumable - from every
+// account. Copies, not links: Desktop lstat-checks the folder before each save
+// and refuses a junction/symlink ("symlink/file plant"), so a linked list
+// loads but never saves again.
+// Must run while this instance is stopped: every account's folders (running
+// ones too, read only) are merged into the shared folder, newer file wins,
+// then the shared folder is merged back into this instance's folders.
+// ponytail: a session deleted in one account comes back from the others on
+// their next sync - track tombstones if that bites. One folder for all orgs,
+// scheduled-tasks.json too - a scheduled task fires in every running instance.
+pub fn sync_shared_sessions(user_data_dir: &Path) -> Result<(), String> {
     let shared = crate::store::instances_dir().join("shared-code-sessions");
-    let root = user_data_dir.join("claude-code-sessions");
-    let Ok(accounts) = fs::read_dir(&root) else { return Ok(()) };
-    for account in accounts.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
-        // A link reports as a symlink, not a dir, so already-linked folders drop out here.
-        for org in fs::read_dir(account.path()).map_err(|e| e.to_string())?.flatten() {
-            if !org.file_type().is_ok_and(|t| t.is_dir()) {
-                continue;
-            }
-            let org = org.path();
-            fs::create_dir_all(&shared).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&shared).map_err(|e| e.to_string())?;
+    for dir in crate::store::list().iter().filter_map(|a| crate::store::user_data_dir(&a.id).ok()) {
+        for org in session_dirs(&dir).into_iter().filter(|o| !is_link(o)) {
             copy_newer(&org, &shared).map_err(|e| format!("merge {}: {e}", org.display()))?;
-            let stamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-            let backup = crate::store::instances_dir()
-                .join("session-backup")
-                .join(format!("{stamp}-{}", account.file_name().to_string_lossy()));
-            fs::create_dir_all(backup.parent().unwrap()).map_err(|e| e.to_string())?;
-            fs::rename(&org, &backup).map_err(|e| format!("back up {}: {e}", org.display()))?;
-            #[cfg(windows)]
-            junction::create(&shared, &org).map_err(|e| e.to_string())?;
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&shared, &org).map_err(|e| e.to_string())?;
         }
     }
+    for org in session_dirs(user_data_dir) {
+        if is_link(&org) {
+            // Left by 4.0.0, which linked the folder instead of copying.
+            fs::remove_dir(&org).or_else(|_| fs::remove_file(&org)).map_err(|e| e.to_string())?;
+            fs::create_dir(&org).map_err(|e| e.to_string())?;
+        }
+        copy_newer(&shared, &org).map_err(|e| format!("fill {}: {e}", org.display()))?;
+    }
     Ok(())
+}
+
+// <user-data-dir>/claude-code-sessions/<account>/<org>, links included.
+fn session_dirs(user_data_dir: &Path) -> Vec<PathBuf> {
+    let Ok(accounts) = fs::read_dir(user_data_dir.join("claude-code-sessions")) else { return vec![] };
+    accounts
+        .flatten()
+        .filter(|a| a.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|a| fs::read_dir(a.path()).ok())
+        .flat_map(|orgs| orgs.flatten())
+        .filter(|o| o.file_type().is_ok_and(|t| t.is_dir() || t.is_symlink()))
+        .map(|o| o.path())
+        .collect()
+}
+
+// A junction counts too (Windows reports it as a symlink, not a dir).
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
 }
 
 fn copy_newer(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -192,4 +205,40 @@ fn copy_newer(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_replaces_link_and_merges_both_ways() {
+        let home = std::env::temp_dir().join(format!("ca-sync-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        std::env::set_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }, &home);
+        let shared = crate::store::instances_dir().join("shared-code-sessions");
+        let org = |id: &str| crate::store::user_data_dir(id).unwrap().join("claude-code-sessions").join("acc").join("org");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(shared.join("local_old.json"), "{}").unwrap();
+        for id in ["a", "b"] {
+            fs::create_dir_all(org(id).parent().unwrap()).unwrap();
+            fs::write(crate::store::account_dir(id).unwrap().join("meta.json"), r#"{"email":"x"}"#).unwrap();
+        }
+        fs::create_dir(org("a")).unwrap();
+        fs::write(org("a").join("local_new.json"), "{}").unwrap();
+        #[cfg(windows)]
+        Command::new("cmd").args(["/c", "mklink", "/J"]).arg(org("b")).arg(&shared).output().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&shared, org("b")).unwrap();
+        assert!(is_link(&org("b")));
+
+        sync_shared_sessions(&crate::store::user_data_dir("b").unwrap()).unwrap();
+
+        assert!(!is_link(&org("b")));
+        for f in ["local_old.json", "local_new.json"] {
+            assert!(org("b").join(f).exists(), "{f} missing in b");
+            assert!(shared.join(f).exists(), "{f} missing in shared");
+        }
+        fs::remove_dir_all(&home).unwrap();
+    }
 }

@@ -49,7 +49,8 @@
 #### ทำงานยังไง
 
 - แต่ละ account มี profile folder ของตัวเองที่ `~/.claude-accounts/<id>/instance/` และเปิด Claude ด้วย `--user-data-dir=<folder นั้น>` เลย login แยกกันและรันพร้อมกันได้
-- รายการ session ของแท็บ Code ของทุก account ชี้ไปที่ folder กลาง `~/.claude-instances/shared-code-sessions/` (ของเดิมถูก backup ไว้ที่ `~/.claude-instances/session-backup/`)
+- ทุกครั้งที่เปิด account จากแอป รายการ session ของแท็บ Code จาก account อื่นทุกตัวจะถูก copy เข้ามา (ไฟล์ที่ใหม่กว่าชนะ ผ่าน folder กลาง `~/.claude-instances/shared-code-sessions/`) — ใช้ copy ไม่ใช่ link เพราะ Claude Desktop ไม่ยอมบันทึกลง folder ที่เป็น link
+- session ที่สร้างใน account ที่เปิดอยู่จะไปโผล่ใน account อื่นตอนเปิด account นั้นครั้งถัดไป และ session ที่ลบใน account หนึ่งอาจกลับมาถ้า account อื่นยังมีอยู่
 - usage และ email ดึงจาก `api.anthropic.com` ด้วย access token ที่ Claude Desktop เก็บไว้อยู่แล้ว (ถอดรหัสบนเครื่องแบบเดียวกับที่ Claude ทำ — Windows DPAPI / macOS Keychain) token ไม่ถูกเขียน, refresh, log หรือส่งไปที่อื่นเลย
 
 รายละเอียดเพิ่มเติมและวิธี build เอง ดูที่ [English → How it works / Build from source](#how-it-works)
@@ -145,12 +146,15 @@ Each account gets its own permanent folder, `~/.claude-accounts/<id>/instance/`,
 and is started with Claude's `--user-data-dir=<that folder>` — so every account
 stays signed in independently and several can run side by side.
 
-The Code tab's session list (`claude-code-sessions/` inside each profile) is a
-link to one shared folder, `~/.claude-instances/shared-code-sessions/`. The
-list entries only point at transcripts in `~/.claude/`, which every account
-already shares, so any session can be continued from any account. The first time
-an account is opened by the app, its existing list is merged in (newer wins) and
-the original is kept in `~/.claude-instances/session-backup/`.
+The Code tab's session list (`claude-code-sessions/` inside each profile) is
+synced by copying: whenever the app opens an account, every account's list is
+merged into `~/.claude-instances/shared-code-sessions/` (newer file wins) and
+that folder is merged back into the account being opened. The list entries
+only point at transcripts in `~/.claude/`, which every account already shares,
+so any session can be continued from any account. It copies rather than links
+because Claude Desktop refuses to save into a linked folder. A session created
+in one account shows up in another the next time that one is opened; a session
+deleted in one account can come back while another account still lists it.
 
 Usage and the email of a new account come from `api.anthropic.com`, using the
 access token Claude Desktop already stores (decrypted locally the same way

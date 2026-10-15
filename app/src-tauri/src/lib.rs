@@ -42,7 +42,7 @@ async fn list_accounts() -> Vec<AccountView> {
 fn open(id: &str) -> Result<(), String> {
     let dir = store::user_data_dir(id)?;
     if !claude::is_running(&claude::snapshot(), &dir) {
-        claude::link_shared_sessions(&dir)?;
+        claude::sync_shared_sessions(&dir)?;
     }
     claude::launch(&dir)
 }
