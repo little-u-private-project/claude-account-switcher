@@ -10,13 +10,18 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+// Errors the usage poller tells apart (quota.rs): no token at all, or a token
+// the API no longer accepts (the account's own Claude refreshes it when opened).
+pub const NOT_SIGNED_IN: &str = "not signed in yet";
+pub const EXPIRED: &str = "signed-out or expired - open the account to refresh";
+
 // One client so requests to api.anthropic.com reuse the connection.
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder().timeout(Duration::from_secs(8)).build().expect("http client")
 });
 
 fn read_json(path: &Path) -> Result<Value, String> {
-    let text = fs::read_to_string(path).map_err(|_| "not signed in yet".to_string())?;
+    let text = fs::read_to_string(path).map_err(|_| NOT_SIGNED_IN.to_string())?;
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
@@ -26,7 +31,7 @@ pub fn access_token(user_data_dir: &Path) -> Result<String, String> {
     let blob = ["oauth:tokenCacheV2", "oauth:tokenCache"]
         .iter()
         .find_map(|k| config[*k].as_str().filter(|s| !s.is_empty()))
-        .ok_or("not signed in yet")?;
+        .ok_or(NOT_SIGNED_IN)?;
     let blob = B64.decode(blob).map_err(|e| e.to_string())?;
     if !blob.starts_with(b"v10") {
         return Err("unknown token format".into());
@@ -37,7 +42,7 @@ pub fn access_token(user_data_dir: &Path) -> Result<String, String> {
         .as_object()
         .and_then(|entries| entries.values().find_map(|e| e["token"].as_str()))
         .map(str::to_string)
-        .ok_or_else(|| "not signed in yet".into())
+        .ok_or_else(|| NOT_SIGNED_IN.into())
 }
 
 // Electron safeStorage = Chromium os_crypt: AES-256-GCM with a DPAPI-wrapped
@@ -123,7 +128,7 @@ async fn api(path: &str, token: &str) -> Result<Value, String> {
         .map_err(|e| format!("network: {e}"))?;
     match resp.status().as_u16() {
         200 => resp.json().await.map_err(|e| e.to_string()),
-        401 => Err("signed-out or expired - open the account to refresh".into()),
+        401 => Err(EXPIRED.into()),
         code => Err(format!("api.anthropic.com returned {code}")),
     }
 }

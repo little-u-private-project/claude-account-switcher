@@ -1,10 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { Effect, EffectState, getCurrentWindow } from "@tauri-apps/api/window";
 
-type Account = { id: string; email: string; displayName: string | null; hotkey: string | null; running: boolean };
+type Account = {
+  id: string;
+  email: string;
+  displayName: string | null;
+  hotkey: string | null;
+  color: string | null;
+  running: boolean;
+};
 type Window = { utilization: number; resets_at: string | null } | null;
 type Usage = { five_hour?: Window; seven_day?: Window };
+// Polled by the backend (quota.rs) - also while the window is hidden.
+type UsageState =
+  | { state: "ok"; usage: Usage }
+  | { state: "signedOut" }
+  | { state: "expired" }
+  | { state: "error"; message: string };
+const COLORS = ["red", "orange", "yellow", "green", "blue", "purple"];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const list = $<HTMLElement>("list");
@@ -13,7 +28,7 @@ const isMac = navigator.userAgent.includes("Mac");
 document.documentElement.classList.toggle("mac", isMac);
 
 let accounts: Account[] = [];
-const usage = new Map<string, Usage | string>();
+const usage = new Map<string, UsageState>();
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 function toast(msg: string) {
@@ -76,13 +91,15 @@ function render() {
     .map((a) => {
       const name = a.displayName || a.email;
       const u = usage.get(a.id);
-      const usageHtml =
-        typeof u === "string"
-          ? `<div class="usage-err">${esc(u)}</div>`
-          : u
-            ? bar("5h", u.five_hour, false) + bar("7d", u.seven_day, true)
-            : `<div class="usage-err">loading usage…</div>`;
-      return `<div class="row ${a.running ? "on" : ""}" data-id="${esc(a.id)}" tabindex="0">
+      const usageHtml = !u
+        ? `<div class="usage-err">loading usage…</div>`
+        : u.state === "ok"
+          ? bar("5h", u.usage.five_hour, false) + bar("7d", u.usage.seven_day, true)
+          : u.state === "error"
+            ? `<div class="usage-err">${esc(u.message)}</div>`
+            : `<div class="signin">${u.state === "signedOut" ? "Signed out · click to sign in" : "Session expired · click to open and refresh"}</div>`;
+      const color = a.color && COLORS.includes(a.color) ? ` data-color style="--dot: var(--c-${a.color})"` : "";
+      return `<div class="row ${a.running ? "on" : ""}" data-id="${esc(a.id)}"${color} tabindex="0" draggable="true">
         <span class="dot" title="${a.running ? "Running" : "Not running"}"></span>
         <div class="body">
           <div class="name">${esc(name)}${a.hotkey ? `<span class="chip">${esc(prettyHotkey(a.hotkey))}</span>` : ""}</div>
@@ -103,24 +120,21 @@ async function refresh() {
   if (changed) render();
 }
 
-async function fetchUsage(id: string) {
-  try {
-    usage.set(id, await invoke<Usage>("account_usage", { id }));
-  } catch (e) {
-    usage.set(id, String(e));
-  }
+function setUsage(map: Record<string, UsageState>) {
+  usage.clear();
+  for (const [id, u] of Object.entries(map)) usage.set(id, u);
+  render();
 }
 
-async function loadUsage(id: string) {
-  await fetchUsage(id);
-  render();
+async function loadUsage(id?: string) {
+  const map = await call<Record<string, UsageState>>("refresh_usage", { id: id ?? null });
+  if (map) setUsage(map);
 }
 
 let usageAt = 0;
 async function loadAllUsage() {
   usageAt = Date.now();
-  await Promise.all(accounts.map((a) => fetchUsage(a.id)));
-  render();
+  await loadUsage();
 }
 
 
@@ -161,9 +175,10 @@ async function rename(a: Account) {
   refresh();
 }
 
-async function setHotkey(a: Account) {
+// The shortcut picked in the dialog, or null when cancelled.
+async function askHotkey(what: string, current: string | null): Promise<string | null> {
   const input = $<HTMLInputElement>("d-input");
-  let combo = a.hotkey ?? "";
+  let combo = current ?? "";
   const onKey = (e: KeyboardEvent) => {
     if (["Tab", "Enter", "Escape"].includes(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) return;
     e.preventDefault();
@@ -179,7 +194,7 @@ async function setHotkey(a: Account) {
   input.addEventListener("keydown", onKey);
   const p = openDialog({
     title: "Hotkey",
-    text: `Press the shortcut that opens ${a.displayName || a.email} from anywhere.`,
+    text: `Press the shortcut that opens ${what} from anywhere.`,
     input: combo ? prettyHotkey(combo) : "",
     ok: "Save",
   });
@@ -187,10 +202,44 @@ async function setHotkey(a: Account) {
   input.focus();
   const result = await p;
   input.removeEventListener("keydown", onKey);
-  if (result === null || !combo) return;
+  return result === null || !combo ? null : combo;
+}
+
+async function setHotkey(a: Account) {
+  const combo = await askHotkey(a.displayName || a.email, a.hotkey);
+  if (combo === null) return;
   await call("set_hotkey", { id: a.id, hotkey: combo });
   refresh();
 }
+
+// "Open best": the account with the most quota left (picked by the backend).
+const bestBtn = $<HTMLButtonElement>("best");
+async function showBestHotkey() {
+  const h = await invoke<string | null>("best_hotkey");
+  bestBtn.title = `Open the account with the most quota left${h ? ` (${prettyHotkey(h)})` : ""}. Right-click for a hotkey.`;
+  return h;
+}
+bestBtn.addEventListener("click", async () => {
+  const name = await call<string>("open_best");
+  if (name) toast(`Opening ${name}`);
+  setTimeout(refresh, 1500);
+});
+bestBtn.addEventListener("contextmenu", async (e) => {
+  e.preventDefault();
+  const h = await showBestHotkey();
+  const save = (hotkey: string | null) => call("set_best_hotkey", { hotkey }).then(showBestHotkey);
+  popupMenu(
+    [
+      [h ? "Change hotkey…" : "Set hotkey…", async () => {
+        const combo = await askHotkey("the account with the most quota left", h);
+        if (combo !== null) save(combo);
+      }],
+      ...(h ? [["Remove hotkey", () => save(null)] as MenuEntry] : []),
+    ],
+    bestBtn,
+  );
+});
+showBestHotkey();
 
 async function addAccount(resumeId?: string) {
   const id = resumeId ?? (await call<string>("add_start"));
@@ -238,9 +287,10 @@ const closeMenu = () => {
   menu = null;
 };
 
+type MenuEntry = [string, () => void];
+
 function showMenu(a: Account, anchor: HTMLElement) {
-  closeMenu();
-  const items: [string, () => void][] = [
+  const items: MenuEntry[] = [
     [a.running ? "Bring to front" : "Open", () => openAccount(a)],
     ...(a.running ? [["Stop", () => stopAccount(a)] as [string, () => void]] : []),
     ["Rename…", () => rename(a)],
@@ -249,7 +299,27 @@ function showMenu(a: Account, anchor: HTMLElement) {
       ? [["Remove hotkey", () => call("set_hotkey", { id: a.id, hotkey: null }).then(refresh)] as [string, () => void]]
       : []),
     ["Refresh usage", () => loadUsage(a.id)],
+    ...(accounts[0]?.id !== a.id ? [["Move to top", () => saveOrder([a.id, ...accounts.map((x) => x.id)])] as MenuEntry] : []),
   ];
+  // Colour of the account's status dot (and its tray menu entry).
+  const swatches = document.createElement("div");
+  swatches.className = "swatches";
+  for (const c of [null, ...COLORS]) {
+    const b = document.createElement("button");
+    b.className = `sw${c ? "" : " none"}${(a.color ?? null) === c ? " sel" : ""}`;
+    b.title = c ?? "No colour";
+    if (c) b.style.background = `var(--c-${c})`;
+    b.onclick = () => {
+      closeMenu();
+      call("set_color", { id: a.id, color: c }).then(refresh);
+    };
+    swatches.append(b);
+  }
+  popupMenu(items, anchor, swatches);
+}
+
+function popupMenu(items: MenuEntry[], anchor: HTMLElement, extra?: HTMLElement) {
+  closeMenu();
   menu = document.createElement("div");
   menu.className = "menu";
   for (const [label, fn] of items) {
@@ -261,6 +331,7 @@ function showMenu(a: Account, anchor: HTMLElement) {
     };
     menu.append(b);
   }
+  if (extra) menu.append(extra);
   document.body.append(menu);
   const r = anchor.getBoundingClientRect();
   const top = Math.min(r.bottom + 4, innerHeight - menu.offsetHeight - 8);
@@ -284,6 +355,32 @@ async function stopAccount(a: Account) {
   setTimeout(refresh, 800);
 }
 
+
+// Drag a row to reorder; the order is saved per account (meta.json).
+async function saveOrder(ids: string[]) {
+  await call("set_order", { ids: [...new Set(ids)] });
+  refresh();
+}
+let dragged: HTMLElement | null = null;
+list.addEventListener("dragstart", (e) => {
+  dragged = rowOf(e);
+  dragged?.classList.add("dragging");
+  e.dataTransfer?.setData("text/plain", dragged?.dataset.id ?? "");
+});
+list.addEventListener("dragover", (e) => {
+  const over = rowOf(e);
+  if (!dragged || !over) return;
+  e.preventDefault();
+  if (over === dragged) return;
+  const r = over.getBoundingClientRect();
+  over[e.clientY > r.top + r.height / 2 ? "after" : "before"](dragged);
+});
+list.addEventListener("dragend", () => {
+  if (!dragged) return;
+  dragged.classList.remove("dragging");
+  dragged = null;
+  saveOrder([...list.querySelectorAll<HTMLElement>(".row")].map((r) => r.dataset.id!));
+});
 
 const rowOf = (e: Event) => (e.target as HTMLElement).closest<HTMLElement>(".row");
 const accountOf = (e: Event) => accounts.find((x) => x.id === rowOf(e)?.dataset.id);
@@ -332,14 +429,14 @@ async function resumePending() {
 
 await refresh();
 render();
-loadAllUsage();
+invoke<Record<string, UsageState>>("usage_all").then(setUsage);
+listen<Record<string, UsageState>>("usage", (e) => setUsage(e.payload));
 resumePending().then(refresh);
 // The window mostly sits hidden in the tray - only poll while it is shown.
 // (WebView2 keeps document.hidden false when the window is hidden, so ask Tauri.)
 const win = getCurrentWindow();
 const shown = () => win.isVisible().catch(() => true);
 setInterval(async () => (await shown()) && refresh(), 5000);
-setInterval(async () => (await shown()) && loadAllUsage(), 5 * 60 * 1000);
 win.onFocusChanged(({ payload: focused }) => {
   if (!focused) return;
   refresh();

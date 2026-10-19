@@ -7,6 +7,7 @@
         "width": 380,
         "height": 520,
         "visible": false,
+        "dragDropEnabled": false,
         "resizable": false,
         "decorations": false,
         "transparent": true,

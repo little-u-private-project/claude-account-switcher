@@ -15,6 +15,12 @@ pub struct Meta {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hotkey: Option<String>,
+    // One of the UI's swatch names (red, orange, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    // Position in the list (drag order); unordered accounts follow, by email.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<i64>,
     // Fields older versions wrote (savedAt, sourceRoot, ...) survive a rewrite.
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
@@ -66,7 +72,7 @@ pub fn list() -> Vec<Account> {
             read_meta(&id).map(|meta| Account { id, meta })
         })
         .collect();
-    out.sort_by_key(|a| a.meta.email.to_lowercase());
+    out.sort_by_key(|a| (a.meta.order.unwrap_or(i64::MAX), a.meta.email.to_lowercase()));
     out
 }
 
@@ -79,6 +85,27 @@ pub fn get(id: &str) -> Result<Account, String> {
 pub fn save(account: &Account) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&account.meta).map_err(|e| e.to_string())?;
     fs::write(account_dir(&account.id)?.join("meta.json"), json).map_err(|e| e.to_string())
+}
+
+// App-wide settings: ~/.claude-accounts/settings.json (a file, so list() skips it).
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_hotkey: Option<String>,
+}
+
+fn settings_path() -> PathBuf {
+    accounts_dir().join("settings.json")
+}
+
+pub fn settings() -> Settings {
+    fs::read_to_string(settings_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn save_settings(settings: &Settings) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(settings_path(), json).map_err(|e| e.to_string())
 }
 
 // A not-yet-saved account: a folder without meta.json, until sign-in is
