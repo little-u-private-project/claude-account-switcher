@@ -12,8 +12,17 @@
       <button id="add" class="primary">Add account</button>
     </header>
     <main id="list"></main>
-    <p class="hint">Click an account to open it. Code-tab sessions are shared by every account. Closing this window keeps the app in the tray so hotkeys keep working.</p>
-    <label class="hint toggle"><input type="checkbox" id="autostart" /> Start at login (hidden in the tray)</label>
+    <p class="hint">Click an account to open it. Code-tab sessions are shared by every account.</p>
+    <footer>
+      <label class="hint toggle"><input type="checkbox" id="autostart" /> Start at login</label>
+      <div id="glass" class="seg" title="Background" hidden><button data-v="frosted">Frosted</button><button data-v="clear">Clear</button></div>
+      <button id="theme" class="quiet icon" data-theme="auto">
+        <svg data-t="auto" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5" /><path d="M8 2.25a5.75 5.75 0 0 1 0 11.5z" fill="currentColor" /></svg>
+        <svg data-t="light" viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.75" fill="none" /><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06" /></svg>
+        <svg data-t="dark" viewBox="0 0 16 16"><path d="M13.6 10.1A6 6 0 0 1 5.9 2.4a6 6 0 1 0 7.7 7.7z" fill="currentColor" /></svg>
+      </button>
+      <button id="quit" class="quiet">Quit</button>
+    </footer>
     <div id="toast" hidden></div>
 
     <dialog id="dialog">

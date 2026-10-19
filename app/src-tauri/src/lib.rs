@@ -177,12 +177,54 @@ fn on_hotkey(shortcut: &Shortcut) {
     }
 }
 
+// macOS steals key focus back once right after the popover is shown (blur fires
+// immediately); a blur this soon after showing is refocused instead of hiding.
+#[cfg(target_os = "macos")]
+static SHOWN_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        {
+            place_popover(&w);
+            *SHOWN_AT.lock().unwrap() = Some(std::time::Instant::now());
+        }
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }
+}
+
+// macOS: the window is a menu-bar popover - just under the menu bar, centred
+// on the cursor (which is on the tray icon when it was clicked), kept on screen.
+// The tray icon's own rect is useless here: macOS reports the whole menu bar
+// (and (0,0) right after launch).
+#[cfg(target_os = "macos")]
+fn place_popover(w: &tauri::WebviewWindow) {
+    let (Ok(cursor), Ok(size)) = (w.cursor_position(), w.outer_size()) else { return };
+    let Ok(Some(m)) = w.monitor_from_point(cursor.x, cursor.y).map(|m| m.or(w.current_monitor().ok().flatten())) else { return };
+    let area = m.work_area();
+    let (left, width) = (area.position.x as f64, area.size.width as f64);
+    let x = (cursor.x - size.width as f64 / 2.0).clamp(left + 8.0, left + width - size.width as f64 - 8.0);
+    let y = area.position.y as f64 + 6.0 * m.scale_factor();
+    let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+// Left click on the tray: macOS toggles the popover, Windows just shows the window.
+fn on_tray_click(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+            return;
+        }
+    }
+    show_main(app);
+}
+
+#[tauri::command]
+fn quit(app: AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -227,10 +269,22 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         })
         .on_tray_icon_event(|tray, e| {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
-                show_main(tray.app_handle());
+                on_tray_click(tray.app_handle());
             }
         })
         .build(app)?;
+
+    // Report the popover as a floating window (what NSPanel popovers report), not a
+    // standard one: "quit when the last window closes" utilities (e.g. Vorssaint)
+    // only track standard windows, so hiding the popover would otherwise quit the app.
+    #[cfg(target_os = "macos")]
+    if let Some(ns) = app.get_webview_window("main").and_then(|w| w.ns_window().ok()) {
+        let role = objc2_foundation::NSString::from_str("AXFloatingWindow");
+        unsafe {
+            let ns = &*(ns as *const objc2::runtime::AnyObject);
+            let _: () = objc2::msg_send![ns, setAccessibilitySubrole: &*role];
+        }
+    }
 
     if !std::env::args().any(|a| a == "--minimized") {
         show_main(app.handle());
@@ -253,11 +307,18 @@ pub fn run() {
                 .build(),
         )
         .setup(setup)
-        .on_window_event(|w, e| {
-            if let WindowEvent::CloseRequested { api, .. } = e {
+        .on_window_event(|w, e| match e {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = w.hide();
             }
+            // The macOS popover closes when you click anywhere else.
+            #[cfg(target_os = "macos")]
+            WindowEvent::Focused(false) => {
+                let just_shown = SHOWN_AT.lock().unwrap().take().is_some_and(|t| t.elapsed() < Duration::from_millis(500));
+                let _ = if just_shown { w.set_focus() } else { w.hide() };
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             list_accounts,
@@ -271,7 +332,8 @@ pub fn run() {
             add_cancel,
             pending_accounts,
             autostart_enabled,
-            set_autostart
+            set_autostart,
+            quit
         ])
         .run(tauri::generate_context!())
         .expect("error while running Claude Accounts");

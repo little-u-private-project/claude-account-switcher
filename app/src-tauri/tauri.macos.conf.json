@@ -1,0 +1,24 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Claude Accounts",
+        "width": 380,
+        "height": 520,
+        "visible": false,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visibleOnAllWorkspaces": true,
+        "windowEffects": {
+          "effects": ["liquidGlassRegular", "popover"],
+          "state": "active",
+          "radius": 16
+        }
+      }
+    ]
+  }
+}

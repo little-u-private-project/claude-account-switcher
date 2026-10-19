@@ -90,9 +90,28 @@ fn has_ancestor_in(mut pid: Pid, own: &HashSet<Pid>, info: impl Fn(Pid) -> Optio
 }
 
 // Starts the account's instance, or - when it already runs - hands the launch
-// to it: Electron's single-instance lock is per user-data-dir, so the running
-// window just comes to the front.
+// to it: on Windows Electron's single-instance lock is per user-data-dir, so the
+// running window just comes to the front. Claude on macOS has no such lock
+// (`open -n` would start a second copy on the same profile), so bring the
+// running one forward ourselves.
 pub fn launch(user_data_dir: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+        let sys = snapshot();
+        let own = pids_for(&sys, user_data_dir);
+        let info = |pid: Pid| sys.process(pid).map(|p| (p.parent(), p.start_time()));
+        // The app itself, not its helpers (they carry --user-data-dir too).
+        // ponytail: activating only raises existing windows - an instance whose
+        // last window was closed stays windowless (needs a reopen Apple Event).
+        if let Some(main) = own.iter().find(|p| !has_ancestor_in(**p, &own, info)) {
+            if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(main.as_u32() as i32) {
+                app.unhide();
+                app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
+                return Ok(());
+            }
+        }
+    }
     let arg = format!("--user-data-dir={}", user_data_dir.display());
     #[cfg(windows)]
     {

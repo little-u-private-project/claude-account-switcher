@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
+import { Effect, EffectState, getCurrentWindow } from "@tauri-apps/api/window";
 
 type Account = { id: string; email: string; displayName: string | null; hotkey: string | null; running: boolean };
 type Window = { utilization: number; resets_at: string | null } | null;
@@ -8,6 +9,8 @@ type Usage = { five_hour?: Window; seven_day?: Window };
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const list = $<HTMLElement>("list");
 const isMac = navigator.userAgent.includes("Mac");
+// macOS styles the window as a menu-bar popover on Liquid Glass (style.css, html.mac).
+document.documentElement.classList.toggle("mac", isMac);
 
 let accounts: Account[] = [];
 const usage = new Map<string, Usage | string>();
@@ -307,6 +310,7 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
 $("add").addEventListener("click", () => addAccount());
+$("quit").addEventListener("click", () => call("quit"));
 
 const autostart = $<HTMLInputElement>("autostart");
 invoke<boolean>("autostart_enabled").then((on) => (autostart.checked = on));
@@ -341,3 +345,51 @@ win.onFocusChanged(({ payload: focused }) => {
   refresh();
   if (Date.now() - usageAt > 60 * 1000) loadAllUsage();
 });
+
+// macOS: the popover is only as tall as its content (HIG: popovers), with room
+// for the ⋯ menu and dialogs; past the cap the page scrolls.
+if (isMac) {
+  const fit = () => win.setSize(new LogicalSize(innerWidth, Math.min(Math.max(document.body.scrollHeight, 280), 640)));
+  new ResizeObserver(fit).observe(document.body);
+}
+
+// macOS background: frosted (Liquid Glass regular, the tauri.macos.conf.json
+// default) or clear (Liquid Glass clear, the see-through iOS 27 look). Kept per
+// machine in the webview's storage.
+if (isMac) {
+  const glass = $<HTMLElement>("glass");
+  const apply = (clear: boolean, save: boolean) => {
+    document.documentElement.classList.toggle("clear", clear);
+    for (const b of glass.querySelectorAll("button")) b.ariaPressed = String((b.dataset.v === "clear") === clear);
+    if (!save) return;
+    localStorage.setItem("glass", clear ? "clear" : "frosted");
+    win.setEffects({ effects: [clear ? Effect.LiquidGlassClear : Effect.LiquidGlassRegular, Effect.Popover], state: EffectState.Active, radius: 16 });
+  };
+  glass.hidden = false;
+  glass.addEventListener("click", (e) => {
+    const v = (e.target as HTMLElement).closest("button")?.dataset.v;
+    if (v) apply(v === "clear", true);
+  });
+  const clear = localStorage.getItem("glass") === "clear";
+  apply(clear, clear);
+}
+
+// Theme: follow the system (default) or force light / dark. setTheme switches
+// the whole app's appearance - the glass and the webview's prefers-color-scheme
+// with it - so the CSS needs no theme switch of its own.
+const themes = ["auto", "light", "dark"] as const;
+type Theme = (typeof themes)[number];
+const themeBtn = $<HTMLButtonElement>("theme");
+const applyTheme = (t: Theme) => {
+  themeBtn.dataset.theme = t;
+  themeBtn.title = `Theme: ${t === "auto" ? "match system" : t}`;
+  win.setTheme(t === "auto" ? null : t);
+};
+themeBtn.addEventListener("click", () => {
+  const next = themes[(themes.indexOf(themeBtn.dataset.theme as Theme) + 1) % themes.length];
+  localStorage.setItem("theme", next);
+  applyTheme(next);
+});
+const savedTheme = localStorage.getItem("theme") as Theme;
+if (themes.includes(savedTheme) && savedTheme !== "auto") applyTheme(savedTheme);
+else themeBtn.title = "Theme: match system";
