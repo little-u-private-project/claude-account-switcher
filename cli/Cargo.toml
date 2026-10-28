@@ -1,0 +1,18 @@
+[package]
+name = "seatdeck-cli"
+version = "4.2.1"
+description = "Switch the account Claude Code (the claude CLI) runs under"
+edition = "2021"
+
+[dependencies]
+# preserve_order + arbitrary_precision: ~/.claude.json is rewritten with its
+# keys and numbers exactly as they were.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+ureq = { version = "2", features = ["json"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

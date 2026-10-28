@@ -16,7 +16,7 @@
 | | Windows | macOS | Linux |
 |---|:---:|:---:|:---:|
 | แอป Claude Accounts (Claude Desktop) | ✅ | ⚠️ build แล้ว ยังไม่ได้ทดสอบจริง | — |
-| Claude Code CLI switcher | ✅ | ✅ | ✅ |
+| Claude Code CLI switcher | ✅ | ⚠️ build แล้ว ยังไม่ได้ทดสอบจริง | ⚠️ build แล้ว ยังไม่ได้ทดสอบจริง |
 
 ### แอป Claude Accounts
 
@@ -57,31 +57,38 @@
 
 ### Claude Code CLI switcher
 
-**ติดตั้ง** (รันจาก folder นี้):
+`seatdeck-cli` เป็นโปรแกรมไฟล์เดียว ไม่ต้องมี PowerShell, Node หรืออย่างอื่นเพิ่ม
 
-```powershell
-.\install.ps1                 # Windows PowerShell
-```
+**ติดตั้ง** — ดาวน์โหลดจากหน้า **[Releases](https://github.com/little-u-private-project/claude-account-switcher/releases/latest)** (`seatdeck-cli-windows-x64.exe`, `seatdeck-cli-macos-universal`, `seatdeck-cli-linux-x64`) แล้ววางไว้ใน PATH หรือใช้คำสั่งบรรทัดเดียว:
 
 ```bash
-pwsh -c ./install.ps1         # macOS / Linux (ต้องมี PowerShell: https://aka.ms/powershell)
+curl -fsSL https://raw.githubusercontent.com/little-u-private-project/claude-account-switcher/main/install.sh | sh
 ```
+
+```powershell
+irm https://raw.githubusercontent.com/little-u-private-project/claude-account-switcher/main/install.ps1 | iex
+```
+
+บรรทัดแรกสำหรับ macOS / Linux (ลงที่ `~/.local/bin`) บรรทัดที่สองสำหรับ Windows (ลงที่ `%LOCALAPPDATA%\Programs\seatdeck-cli` และลบ switcher แบบ PowerShell ตัวเก่าออกให้) account ที่บันทึกไว้จากเวอร์ชันเก่าใช้ต่อได้เลย ไม่ต้องเพิ่มใหม่
 
 **บันทึกแต่ละ account** (ทำครั้งเดียว):
 
-1. ใน Claude Code พิมพ์ `/login` ด้วย account แรก
-2. รัน `claude-code-add` → ใส่ email ของ account นั้น
-3. ตอบ **y** ที่ "Add ANOTHER account?" — login จะถูกล้างแค่ในเครื่อง (ไม่ได้ logout) account ที่บันทึกไว้จึงยังใช้ได้
-4. `/login` ด้วย account ถัดไป แล้วรัน `claude-code-add` อีกครั้ง ทำซ้ำไปเรื่อย ๆ ตอบ **n** ที่ account สุดท้าย
+1. รัน `claude` แล้วพิมพ์ `/login` ด้วย account แรก
+2. รัน `seatdeck-cli add` — ใช้ email ที่ Claude Code แสดงอยู่
+3. ตอบ **y** ที่ "Clear the local login now" — login จะถูกล้างแค่ในเครื่อง (ไม่ได้ logout) account ที่บันทึกไว้จึงยังใช้ได้
+4. `/login` ด้วย account ถัดไป แล้วรัน `seatdeck-cli add` อีกครั้ง ทำซ้ำไปเรื่อย ๆ ตอบ **n** ที่ account สุดท้าย
 
 **สลับ account แล้วทำงานต่อ:**
 
-```powershell
-claude-code-switch     # เลือก account (แสดง usage; * = อันที่ใช้อยู่)
-claude --resume        # ทำ conversation เดิมต่อด้วย account ใหม่
+```bash
+seatdeck-cli list            # account ที่บันทึกไว้ พร้อม usage 5 ชั่วโมง / 7 วัน (* = อันที่ใช้อยู่)
+seatdeck-cli switch          # เลือกจากรายการ (หรือ seatdeck-cli switch 2 / switch <email>)
+claude --resume              # ทำ conversation เดิมต่อด้วย account ใหม่
 ```
 
-ปิด Claude Code session ที่เปิดอยู่ก่อนสลับ เพื่อให้มันอ่าน login ใหม่ · `claude-code-doctor` ใช้ตรวจการตั้งค่า · `.\uninstall.ps1` ใช้ถอนการติดตั้ง (account ที่บันทึกไว้จะไม่ถูกลบ)
+ปิด Claude Code session ที่เปิดอยู่ก่อนสลับ เพื่อให้มันอ่าน login ใหม่ · `seatdeck-cli doctor` ใช้ตรวจการตั้งค่า · ถอนการติดตั้งแค่ลบไฟล์ `seatdeck-cli` (account ที่บันทึกไว้อยู่ใน `~/.claude-cc-accounts`)
+
+เครื่องมือนี้ไม่สลับ account ให้เองเมื่อชน limit — การเลือก account เป็นการกระทำของผู้ใช้เสมอ
 
 ---
 
@@ -105,7 +112,7 @@ seats) without ever logging out and back in.
 | | Windows | macOS | Linux |
 |---|:---:|:---:|:---:|
 | Claude Accounts app (Claude Desktop) | ✅ | ⚠️ built, not yet verified | — |
-| Claude Code CLI switcher | ✅ | ✅ | ✅ |
+| Claude Code CLI switcher | ✅ | ⚠️ built, not yet verified | ⚠️ built, not yet verified |
 
 ### Claude Accounts (Claude Desktop)
 
@@ -201,43 +208,61 @@ a draft release.
 
 ### Claude Code CLI switcher
 
-**Install** (from this folder):
+`seatdeck-cli` is a single binary — no PowerShell, Node or anything else to
+install.
 
-```powershell
-.\install.ps1                 # Windows PowerShell
-```
+**Install** — download it from the **[Releases](https://github.com/little-u-private-project/claude-account-switcher/releases/latest)**
+page (`seatdeck-cli-windows-x64.exe`, `seatdeck-cli-macos-universal`,
+`seatdeck-cli-linux-x64`) and put it on your PATH, or use the one-liner:
 
 ```bash
-pwsh -c ./install.ps1         # macOS / Linux (needs PowerShell: https://aka.ms/powershell)
+curl -fsSL https://raw.githubusercontent.com/little-u-private-project/claude-account-switcher/main/install.sh | sh
 ```
+
+```powershell
+irm https://raw.githubusercontent.com/little-u-private-project/claude-account-switcher/main/install.ps1 | iex
+```
+
+The first is for macOS / Linux (installs to `~/.local/bin`), the second for
+Windows (installs to `%LOCALAPPDATA%\Programs\seatdeck-cli` and removes the old
+PowerShell switcher). Accounts saved by earlier versions keep working; there is
+no need to add them again.
 
 **Save each account** (one-time):
 
-1. In Claude Code, `/login` as your first account.
-2. Run `claude-code-add` → enter its email.
-3. Answer **y** to "Add ANOTHER account?" — your login is cleared locally (not
-   logged out), so the saved one stays valid.
-4. `/login` as the next account, run `claude-code-add` again. Repeat; answer
+1. Run `claude` and `/login` as your first account.
+2. Run `seatdeck-cli add` — it uses the email Claude Code shows.
+3. Answer **y** to "Clear the local login now" — your login is cleared locally
+   (not logged out), so the saved one stays valid.
+4. `/login` as the next account, run `seatdeck-cli add` again. Repeat; answer
    **n** on the last.
 
 **Switch + continue your work:**
 
-```powershell
-claude-code-switch     # pick the account (shows usage; * = current)
-claude --resume        # continue the same conversation under the new account
+```bash
+seatdeck-cli list            # saved accounts with 5-hour / 7-day usage (* = current)
+seatdeck-cli switch          # pick from the list (or: seatdeck-cli switch 2 / switch <email>)
+claude --resume              # continue the same conversation under the new account
 ```
 
 Project transcripts live in `~/.claude/projects/` (shared across accounts), so
 `claude --resume` picks up exactly where you left off. Close any open Claude
 Code session before switching so it re-reads the new login.
-`claude-code-doctor` checks the setup.
+`seatdeck-cli doctor` checks the setup.
 
-**Updating** — auto-update is disabled for this vendored copy:
-`claude-switch-update` only prints a reminder to review the upstream diff and
-re-run the local `install.ps1`.
+Switching replaces only the Claude login; other entries in the credentials
+(MCP server logins, for example) stay as they are. Every `list` / `switch`
+first saves the current account's refreshed login, so switching back never
+restores a revoked token. The previous login is backed up to
+`~/.claude-cc-accounts/.backups/` before each switch. The tool never switches
+accounts on its own when a limit is hit — picking an account is always your
+call. Its behaviour is specified in [`cli/SPEC.md`](cli/SPEC.md).
 
-**Uninstall** — `.\uninstall.ps1` removes the CLI switcher (and leftovers of the
-retired desktop switcher). Saved accounts are left alone.
+**Uninstall** — delete the `seatdeck-cli` binary. Saved accounts are in
+`~/.claude-cc-accounts`.
+
+**Build from source** — `cd cli && cargo test && cargo build --release`.
+Release binaries are built by `.github/workflows/cli.yml` for every `v*` tag.
 
 ---
 
