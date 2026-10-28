@@ -1,0 +1,79 @@
+# Builds seatdeck-cli (Windows x64, macOS universal, Linux x64 static) and
+# attaches it to the draft release that release.yml creates for the same v* tag.
+# Started by hand from the Actions tab, it only uploads build artifacts.
+name: cli
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: seatdeck-cli-windows-x64.exe
+          - os: macos-latest
+            asset: seatdeck-cli-macos-universal
+          - os: ubuntu-latest
+            asset: seatdeck-cli-linux-x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: cli
+    env:
+      ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-musl' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+
+      - run: cargo test
+
+      - name: Build
+        run: |
+          case "${{ matrix.os }}" in
+            windows-latest)
+              cargo build --release
+              cp target/release/seatdeck-cli.exe "$ASSET" ;;
+            macos-latest)
+              cargo build --release --target aarch64-apple-darwin
+              cargo build --release --target x86_64-apple-darwin
+              lipo -create -output "$ASSET" target/aarch64-apple-darwin/release/seatdeck-cli target/x86_64-apple-darwin/release/seatdeck-cli ;;
+            ubuntu-latest)
+              sudo apt-get update && sudo apt-get install -y musl-tools
+              cargo build --release --target x86_64-unknown-linux-musl
+              cp target/x86_64-unknown-linux-musl/release/seatdeck-cli "$ASSET" ;;
+          esac
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The app build in release.yml creates the draft; wait up to 40 min.
+          for _ in $(seq 80); do
+            gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 && break
+            sleep 30
+          done
+          gh release upload "$GITHUB_REF_NAME" "$ASSET" --clobber
+
+      - name: Upload artifact (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: cli/${{ matrix.asset }}

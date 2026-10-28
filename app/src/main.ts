@@ -523,7 +523,8 @@ async function about() {
     text:
       "Your work and personal Claude accounts side by side, each in its own Claude Desktop window.\n\n" +
       "Unofficial. Not affiliated with, endorsed or sponsored by Anthropic. Claude is a trademark of Anthropic, PBC.\n\n" +
-      "github.com/little-u-private-project/claude-account-switcher",
+      "github.com/little-u-private-project/claude-account-switcher\n\n" +
+      "Free and open source. Support it: github.com/sponsors/RinneHighz",
     cancel: null,
   });
 }
