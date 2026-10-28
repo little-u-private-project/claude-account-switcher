@@ -50,26 +50,65 @@ pub fn is_running(sys: &System, user_data_dir: &Path) -> bool {
 pub fn stop(user_data_dir: &Path) {
     let sys = snapshot();
     let own = pids_for(&sys, user_data_dir);
-    // This app is a boundary: when it was started from one of the stopped
-    // instance's Code sessions, neither it nor the other accounts' instances
-    // it launched go down with it.
-    let me = sysinfo::get_current_pid().ok();
-    let info = |pid: Pid| (Some(pid) != me).then(|| sys.process(pid)).flatten().map(|p| (p.parent(), p.start_time()));
-    let has_own_ancestor = |pid: Pid| has_ancestor_in(pid, &own, info);
     if cfg!(target_os = "macos") {
         // Quit the app politely; it takes its helpers down with it.
-        for pid in own.iter().filter(|p| !has_own_ancestor(**p)) {
+        let info = |pid: Pid| sys.process(pid).map(|p| (p.parent(), p.start_time()));
+        for pid in own.iter().filter(|p| !has_ancestor_in(**p, &own, info)) {
             if let Some(p) = sys.process(*pid) {
                 p.kill_with(sysinfo::Signal::Term);
             }
         }
     } else {
-        for (pid, p) in sys.processes() {
-            if own.contains(pid) || has_own_ancestor(*pid) {
-                p.kill();
-            }
+        kill_trees(&sys, &own);
+    }
+}
+
+fn kill_trees(sys: &System, own: &HashSet<Pid>) {
+    // This app is a boundary: when it was started from one of the stopped
+    // instance's Code sessions, neither it nor the other accounts' instances
+    // it launched go down with it.
+    let me = sysinfo::get_current_pid().ok();
+    let info = |pid: Pid| (Some(pid) != me).then(|| sys.process(pid)).flatten().map(|p| (p.parent(), p.start_time()));
+    for (pid, p) in sys.processes() {
+        if own.contains(pid) || has_ancestor_in(*pid, own, info) {
+            p.kill();
         }
     }
+}
+
+// Claude Desktop's last log line when it quits to install an update.
+pub fn quit_for_update(user_data_dir: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut log) = fs::File::open(user_data_dir.join("logs").join("main.log")) else { return false };
+    let mut tail = vec![];
+    let _ = log.seek(SeekFrom::End(-4096)).or_else(|_| log.seek(SeekFrom::Start(0)));
+    log.read_to_end(&mut tail).is_ok() && String::from_utf8_lossy(&tail).contains("going down for update")
+}
+
+// Main processes of Claude Desktop on its own default profile (no
+// --user-data-dir) started at or after `since` (unix seconds).
+#[cfg(windows)]
+pub fn default_instances(sys: &System, since: u64) -> HashSet<Pid> {
+    let Ok(exe) = find_exe() else { return HashSet::new() };
+    sys.processes()
+        .iter()
+        .filter(|(_, p)| {
+            let cmd = p.cmd();
+            p.start_time() >= since
+                && cmd.first().is_some_and(|a| same_path(&a.to_string_lossy(), &exe))
+                && !cmd.iter().any(|a| {
+                    let a = a.to_string_lossy();
+                    a.starts_with("--user-data-dir=") || a.starts_with("--type=")
+                })
+        })
+        .map(|(pid, _)| *pid)
+        .collect()
+}
+
+#[cfg(windows)]
+pub fn stop_default(since: u64) {
+    let sys = snapshot();
+    kill_trees(&sys, &default_instances(&sys, since));
 }
 
 // Walks up the parent chain; info(pid) = (parent, start time). Windows reuses
@@ -303,6 +342,19 @@ mod tests {
         let hit = |p| has_ancestor_in(Pid::from_u32(p), &own, &info);
         assert!(hit(2) && hit(3) && hit(5));
         assert!(!hit(4) && !hit(6) && !hit(1));
+    }
+
+    #[test]
+    fn spots_quit_for_update() {
+        let dir = std::env::temp_dir().join(format!("ca-update-{}", std::process::id()));
+        fs::create_dir_all(dir.join("logs")).unwrap();
+        let log = dir.join("logs").join("main.log");
+        assert!(!quit_for_update(&dir), "no log");
+        fs::write(&log, "x\n".repeat(5000) + "[info] beforeQuitForUpdate handler fired, going down for update\n").unwrap();
+        assert!(quit_for_update(&dir));
+        fs::write(&log, "[info] beforeQuitForUpdate handler fired, going down for update\n[info] Starting app {\n".to_string() + &"x\n".repeat(5000)).unwrap();
+        assert!(!quit_for_update(&dir), "relaunched since");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

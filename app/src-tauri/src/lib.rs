@@ -435,6 +435,48 @@ fn on_tray_click(app: &AppHandle) {
     show_main(app);
 }
 
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+// A Store update quits every Claude instance, then Windows starts one again -
+// without --user-data-dir, so on Claude's default (personal) profile. Close
+// that one and reopen the accounts the update closed. `last` = the accounts
+// running at the previous tick, and whether the default profile was.
+// ponytail: a personal window the user opens themselves within ~2 min of an
+// update gets closed too, unless it was already running before the update.
+#[cfg(windows)]
+fn recover_from_update(app: &AppHandle, last: &mut (std::collections::HashSet<String>, bool)) {
+    let sys = claude::snapshot();
+    let now = store::list().into_iter().filter(|a| running(&sys, &a.id)).map(|a| a.id).collect();
+    let default_now = !claude::default_instances(&sys, 0).is_empty();
+    let (before, default_before) = std::mem::replace(last, (now, default_now));
+    let mut closed: Vec<String> = before
+        .difference(&last.0)
+        .filter(|id| store::user_data_dir(id).is_ok_and(|d| claude::quit_for_update(&d)))
+        .cloned()
+        .collect();
+    if closed.is_empty() {
+        return;
+    }
+    // The update happened since the previous tick (30 s ago).
+    let since = unix_now() - 45;
+    let (app, count) = (app.clone(), closed.len());
+    std::thread::spawn(move || {
+        // Windows' relaunch can come a few seconds late; keep watching a minute.
+        for _ in 0..30 {
+            if !default_before {
+                claude::stop_default(since);
+            }
+            closed.retain(|id| !running(&claude::snapshot(), id) && open(id).is_err());
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        let body = format!("Claude was updated - reopened {count} account(s)");
+        let _ = app.notification().builder().title("Claude Accounts").body(body).show();
+        update_tray(&app);
+    });
+}
+
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
@@ -519,12 +561,16 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Running state for the tray every 30 s, usage every 5 min.
     let handle = app.handle().clone();
     std::thread::spawn(move || {
+        #[cfg(windows)]
+        let mut last = Default::default();
         for tick in 0u64.. {
             if tick % 10 == 0 {
                 tauri::async_runtime::block_on(refresh(&handle, None));
             } else {
                 update_tray(&handle);
             }
+            #[cfg(windows)]
+            recover_from_update(&handle, &mut last);
             std::thread::sleep(Duration::from_secs(30));
         }
     });
@@ -607,6 +653,8 @@ mod tests {
     #[test]
     #[ignore]
     fn probe() {
+        #[cfg(windows)]
+        println!("default-profile instances: {:?}", claude::default_instances(&claude::snapshot(), 0));
         tauri::async_runtime::block_on(async {
             for a in list_accounts().await {
                 let dir = store::user_data_dir(&a.id).unwrap();
