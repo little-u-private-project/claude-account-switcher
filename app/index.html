@@ -3,19 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Claude Accounts</title>
+    <title>Seatdeck</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <header>
-      <h1>Claude Accounts</h1>
+      <h1>Seatdeck</h1>
       <div class="actions">
         <button id="best">Open best</button>
         <button id="add" class="primary">Add account</button>
       </div>
     </header>
     <main id="list"></main>
-    <p class="hint">Click an account to open it. Code-tab sessions are shared by every account.</p>
+    <p class="hint">Click an account to open it. <span id="sharing-hint"></span></p>
+    <p class="hint warn" id="sharing-stopped" hidden></p>
     <footer>
       <label class="hint toggle"><input type="checkbox" id="autostart" /> Start at login</label>
       <div id="glass" class="seg" title="Background" hidden><button data-v="frosted">Frosted</button><button data-v="clear">Clear</button></div>
@@ -24,8 +25,10 @@
         <svg data-t="light" viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.75" fill="none" /><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06" /></svg>
         <svg data-t="dark" viewBox="0 0 16 16"><path d="M13.6 10.1A6 6 0 0 1 5.9 2.4a6 6 0 1 0 7.7 7.7z" fill="currentColor" /></svg>
       </button>
+      <button id="settings" class="quiet" title="Settings and tools" data-menu>⋯</button>
       <button id="quit" class="quiet">Quit</button>
     </footer>
+    <p class="disclaimer">Unofficial · not affiliated with Anthropic</p>
     <div id="toast" hidden></div>
 
     <dialog id="dialog">

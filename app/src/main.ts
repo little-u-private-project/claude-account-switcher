@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -341,6 +342,7 @@ function popupMenu(items: MenuEntry[], anchor: HTMLElement, extra?: HTMLElement)
 
 async function openAccount(a: Account) {
   await call("open_account", { id: a.id });
+  loadSharing(); // sync may have turned itself off
   setTimeout(refresh, 1500);
 }
 
@@ -417,6 +419,129 @@ autostart.addEventListener("change", async () => {
   }
 });
 
+// Session sharing is opt-in; the hint under the list says which mode is on.
+type Sharing = { shared: boolean; stopped: string | null };
+let sharing: Sharing = { shared: false, stopped: null };
+async function loadSharing() {
+  sharing = (await call<Sharing>("session_sharing")) ?? sharing;
+  $("sharing-hint").textContent = sharing.shared
+    ? "Code-tab sessions are shared by every account."
+    : "Each account keeps its own Code-tab sessions.";
+  const stopped = $<HTMLElement>("sharing-stopped");
+  stopped.textContent = sharing.stopped ?? "";
+  stopped.hidden = !sharing.stopped;
+}
+loadSharing();
+
+const SHARING_RISKS = [
+  "Every account lists - and can resume - every account's Code-tab sessions. Each time you open a stopped account, its list is backed up, then synced.",
+  "",
+  "Before you turn it on:",
+  "• The same session open in two accounts at once: the last one to save wins. Seatdeck can't see which session a window has open, so it can't warn you.",
+  "• Not live: a session started in one account shows up in another after you reopen that account from Seatdeck.",
+  "• A Claude Desktop update may change the session file format. If Seatdeck finds a file it doesn't recognise, sync turns itself off and tells you why.",
+  "• Deleting a session deletes it in every account. Restore session backup brings it back.",
+].join("\n");
+
+async function toggleSharing() {
+  const ok = sharing.shared
+    ? await openDialog({
+        title: "Stop sharing sessions?",
+        text: "Accounts stop syncing their Code-tab session lists. Nothing is deleted: every account keeps the sessions it has now.",
+        ok: "Stop sharing",
+      })
+    : await openDialog({ title: "Share Code-tab sessions?", text: SHARING_RISKS, ok: "Share sessions" });
+  if (ok === null) return;
+  await call("set_session_sharing", { on: !sharing.shared });
+  loadSharing();
+}
+
+type Backup = { stamp: string; account: string };
+async function restoreMenu(anchor: HTMLElement) {
+  const backups = (await call<Backup[]>("session_backups")) ?? [];
+  if (!backups.length) return toast("No session backups yet - one is made before each sync.");
+  popupMenu(backups.map((b) => [`${new Date(Number(b.stamp)).toLocaleString()} · ${b.account}`, () => restore(b)] as MenuEntry), anchor);
+}
+
+async function restore(b: Backup) {
+  const at = new Date(Number(b.stamp)).toLocaleString();
+  const ok = await openDialog({
+    title: "Restore session backup?",
+    text: `Puts ${b.account}'s Code-tab session list and the shared copy back the way they were at ${at}. The current state is backed up first, so this can be undone.\n\n${b.account} must be stopped.`,
+    ok: "Restore",
+  });
+  if (ok === null) return;
+  const name = await call<string>("restore_backup", { stamp: b.stamp });
+  if (name) toast(`Restored ${name}'s sessions`);
+}
+
+type Finding = { problem: string; action: string; fixed: boolean };
+const findings = (list: Finding[]) =>
+  list.length ? list.map((f) => `${f.fixed ? "✓" : "•"} ${f.problem}\n    ${f.action}`).join("\n") : "No problems found.";
+
+async function checkAndRepair() {
+  const found = await call<Finding[]>("check_and_repair", { fix: false });
+  if (!found) return;
+  const repair = await openDialog({
+    title: "Check & repair",
+    text: findings(found) + (found.length ? "\n\nRepair fixes only what is safe (stopped accounts, after a backup)." : ""),
+    ok: found.length ? "Repair" : "OK",
+    cancel: found.length ? "Close" : null,
+  });
+  if (repair !== null && found.length) {
+    const after = await call<Finding[]>("check_and_repair", { fix: true });
+    if (after) await openDialog({ title: "Check & repair", text: findings(after), cancel: null });
+  }
+  loadSharing();
+  refresh();
+}
+
+async function askUpdate(version: string) {
+  if (dialog.open) return; // asked again on the next check, or from the menu
+  const ok = await openDialog({
+    title: "Update available",
+    text: `Seatdeck ${version} is available (you have ${await getVersion()}). Install it now? Seatdeck restarts; your Claude windows stay open.`,
+    ok: "Install",
+    cancel: "Later",
+  });
+  if (ok === null) return;
+  toast("Downloading the update…");
+  await call("install_update");
+}
+
+async function checkUpdate() {
+  const version = await call<string | null>("check_update");
+  if (version) askUpdate(version);
+  else if (version === null) toast("Seatdeck is up to date");
+}
+listen<string>("update-available", (e) => askUpdate(e.payload));
+listen("check-update", checkUpdate);
+
+async function about() {
+  await openDialog({
+    title: `Seatdeck ${await getVersion()}`,
+    text:
+      "Your work and personal Claude accounts side by side, each in its own Claude Desktop window.\n\n" +
+      "Unofficial. Not affiliated with, endorsed or sponsored by Anthropic. Claude is a trademark of Anthropic, PBC.\n\n" +
+      "github.com/little-u-private-project/claude-account-switcher",
+    cancel: null,
+  });
+}
+
+const settingsBtn = $<HTMLButtonElement>("settings");
+settingsBtn.addEventListener("click", () =>
+  popupMenu(
+    [
+      [sharing.shared ? "Stop sharing sessions…" : "Share Code-tab sessions…", toggleSharing],
+      ["Restore session backup…", () => restoreMenu(settingsBtn)],
+      ["Check & repair…", checkAndRepair],
+      ["Check for updates…", checkUpdate],
+      ["About Seatdeck", about],
+    ],
+    settingsBtn,
+  ),
+);
+
 // The app was closed in the middle of adding an account: keep going if that
 // window is still open, otherwise save it if it got signed in, else clean up.
 async function resumePending() {
@@ -440,6 +565,7 @@ setInterval(async () => (await shown()) && refresh(), 5000);
 win.onFocusChanged(({ payload: focused }) => {
   if (!focused) return;
   refresh();
+  loadSharing();
   if (Date.now() - usageAt > 60 * 1000) loadAllUsage();
 });
 

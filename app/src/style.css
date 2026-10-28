@@ -277,6 +277,9 @@ dialog::backdrop {
 
 dialog p {
   margin: 0 0 12px;
+  white-space: pre-line;
+  max-height: 50vh;
+  overflow: auto;
   color: var(--muted);
   user-select: text;
   -webkit-user-select: text;
@@ -332,6 +335,17 @@ footer {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.hint.warn {
+  color: var(--c-orange);
+}
+
+.disclaimer {
+  margin: 6px 2px 0;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
 }
 
 footer .toggle {

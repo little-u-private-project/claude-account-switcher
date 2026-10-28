@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Claude Accounts",
+  "productName": "Seatdeck",
   "identifier": "com.littleusagi.claude-accounts",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Claude Accounts",
+        "title": "Seatdeck",
         "width": 460,
         "height": 600,
         "minWidth": 380,
@@ -28,7 +28,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "dmg", "app"],
+    "targets": [
+      "nsis",
+      "dmg",
+      "app"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -40,8 +44,26 @@
       "minimumSystemVersion": "11.0"
     },
     "windows": {
-      "webviewInstallMode": { "type": "downloadBootstrapper" },
-      "nsis": { "installMode": "currentUser" }
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "installer-hooks.nsh"
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "version": "4.3.0",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlBMzRBMDc2MEVDNDM3NjUKUldSbE44UU9kcUEwbXNhRlBPWjR6a2FZbkgzMFpTd2k4OTZhaXIybXdlNnVZNWpwdXJ3aTFkRkMK",
+      "endpoints": [
+        "https://github.com/little-u-private-project/claude-account-switcher/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

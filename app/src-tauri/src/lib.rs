@@ -1,5 +1,7 @@
 mod claude;
+mod doctor;
 mod quota;
+mod sessions;
 mod store;
 mod token;
 
@@ -13,6 +15,9 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_updater::UpdaterExt;
+
+const APP: &str = "Seatdeck";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +65,7 @@ fn open(id: &str) -> Result<(), String> {
     let dir = store::user_data_dir(id)?;
     // A failed merge only means fewer shared sessions - open the account
     // anyway, then report it.
-    let synced = if claude::is_running(&claude::snapshot(), &dir) { Ok(()) } else { claude::sync_shared_sessions(&dir) };
+    let synced = if !store::session_sharing() || claude::is_running(&claude::snapshot(), &dir) { Ok(()) } else { sessions::sync(id) };
     claude::launch(&dir)?;
     *CURRENT.lock().unwrap() = Some(id.to_string());
     synced
@@ -179,7 +184,7 @@ fn update_tray(app: &AppHandle) {
     });
     let current = current.and_then(|id| rows.iter().find(|(a, _, _)| a.id == id));
     let _ = tray.set_title(current.and_then(|(_, _, u)| u.and_then(|u| u.binding())).map(|p| format!("{p:.0}%")));
-    let _ = tray.set_tooltip(Some(current.map_or("Claude Accounts".into(), |(a, _, u)| {
+    let _ = tray.set_tooltip(Some(current.map_or(APP.into(), |(a, _, u)| {
         format!("{} - {}", name(a), u.map_or("usage loading".into(), |u| u.short()))
     })));
 
@@ -216,7 +221,8 @@ fn tray_menu(app: &AppHandle, entries: &[(String, String, bool)], best: Option<&
     }
     menu.append(&MenuItem::with_id(app, "best", best.unwrap_or("Open best account"), best.is_some(), None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "show", "Show Claude Accounts", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "update", "Check for updates…", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "show", "Show Seatdeck", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
     Ok(menu)
 }
@@ -276,7 +282,7 @@ async fn set_best_hotkey(app: AppHandle, hotkey: Option<String>) -> Result<(), S
             return Err(format!("{h} is already used by {}", name(&a)));
         }
     }
-    store::save_settings(&store::Settings { best_hotkey: hotkey })?;
+    store::update_settings(|s| s.best_hotkey = hotkey)?;
     register_hotkeys(&app)
 }
 
@@ -382,7 +388,7 @@ fn on_hotkey(app: &AppHandle, shortcut: &Shortcut) {
     let is = |h: Option<&str>| h.and_then(|h| h.parse::<Shortcut>().ok()).as_ref() == Some(shortcut);
     if is(store::settings().best_hotkey.as_deref()) {
         if let Err(e) = open_best_account() {
-            let _ = app.notification().builder().title("Claude Accounts").body(e).show();
+            let _ = app.notification().builder().title(APP).body(e).show();
         }
     } else if let Some(a) = store::list().into_iter().find(|a| is(a.meta.hotkey.as_deref())) {
         let _ = open(&a.id);
@@ -472,7 +478,7 @@ fn recover_from_update(app: &AppHandle, last: &mut (std::collections::HashSet<St
             std::thread::sleep(Duration::from_secs(2));
         }
         let body = format!("Claude was updated - reopened {count} account(s)");
-        let _ = app.notification().builder().title("Claude Accounts").body(body).show();
+        let _ = app.notification().builder().title(APP).body(body).show();
         update_tray(&app);
     });
 }
@@ -493,10 +499,106 @@ fn set_autostart(app: AppHandle, on: bool) -> Result<(), String> {
     if on { launcher.enable() } else { launcher.disable() }.map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SharingView {
+    shared: bool,
+    // Why sync turned itself off, if it did.
+    stopped: Option<String>,
+}
+
+#[tauri::command]
+fn session_sharing() -> SharingView {
+    SharingView { shared: store::session_sharing(), stopped: store::settings().session_sharing_stopped }
+}
+
+// Off only stops syncing - every account keeps the sessions it has.
+#[tauri::command]
+fn set_session_sharing(on: bool) -> Result<(), String> {
+    store::update_settings(|s| {
+        s.session_sharing = Some(if on { "shared" } else { "separate" }.into());
+        s.session_sharing_stopped = None;
+    })
+}
+
+#[derive(Serialize)]
+struct BackupView {
+    stamp: String,
+    account: String,
+}
+
+#[tauri::command]
+fn session_backups() -> Vec<BackupView> {
+    let accounts = store::list();
+    sessions::list_backups()
+        .into_iter()
+        .map(|b| BackupView {
+            account: accounts.iter().find(|a| a.id == b.account).map_or(b.account.clone(), name),
+            stamp: b.stamp,
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn restore_backup(stamp: String) -> Result<String, String> {
+    let snap = sessions::list_backups().into_iter().find(|b| b.stamp == stamp).ok_or("no such backup")?;
+    if running(&claude::snapshot(), &snap.account) {
+        return Err("Stop that account first - Claude rewrites its session list while it runs".into());
+    }
+    let id = sessions::restore(&stamp)?;
+    Ok(store::get(&id).map_or(id, |a| name(&a)))
+}
+
+#[tauri::command]
+async fn check_and_repair(app: AppHandle, fix: bool) -> Vec<doctor::Finding> {
+    let mut out = doctor::run(fix);
+    if let Err(e) = register_hotkeys(&app) {
+        out.push(doctor::Finding { problem: format!("Hotkey {e}"), action: "Pick another key for it.".into(), fixed: false });
+    }
+    out
+}
+
+// The newer version, if there is one.
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<String>, String> {
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    Ok(update.map(|u| u.version))
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    let update = update.ok_or("Already up to date")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    app.restart()
+}
+
+// Background check: a notification, and the window asks (update-available).
+async fn notify_update(app: &AppHandle) {
+    if let Ok(Some(version)) = check_update(app.clone()).await {
+        let body = format!("Seatdeck {version} is available - open Seatdeck to install it");
+        let _ = app.notification().builder().title(APP).body(body).show();
+        let _ = app.emit("update-available", version);
+    }
+}
+
+// Before 4.3.0 the app was "Claude Accounts", and the start-at-login entry is
+// named after the app. Windows: the installer moves it (installer-hooks.nsh).
+// macOS: the old LaunchAgent would start the old copy too - move it here.
+#[cfg(target_os = "macos")]
+fn migrate_login_item(app: &AppHandle) {
+    let old = std::env::home_dir().unwrap_or_default().join("Library/LaunchAgents/Claude Accounts.plist");
+    if old.exists() && std::fs::remove_file(&old).is_ok() {
+        let _ = app.autolaunch().enable();
+    }
+}
+
 // Starts at login hidden in the tray (hotkeys need the app running); closing
 // the window only hides it. Quit from the tray menu.
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let _ = register_hotkeys(app.handle());
+    #[cfg(target_os = "macos")]
+    migrate_login_item(app.handle());
 
     // Start at login is on by default - set once, then left to the user's toggle.
     let decided = app.path().app_config_dir()?.join("autostart-decided");
@@ -517,16 +619,20 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().cloned().ok_or("no app icon")?)
-        .tooltip("Claude Accounts")
+        .tooltip(APP)
         .menu(&tray_menu(app.handle(), &[], None)?)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| {
             match e.id.as_ref() {
                 "show" => show_main(app),
+                "update" => {
+                    show_main(app);
+                    let _ = app.emit("check-update", ());
+                }
                 "quit" => app.exit(0),
                 "best" => {
                     if let Err(e) = open_best_account() {
-                        let _ = app.notification().builder().title("Claude Accounts").body(e).show();
+                        let _ = app.notification().builder().title(APP).body(e).show();
                     }
                 }
                 id => {
@@ -558,12 +664,16 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Running state for the tray every 30 s, usage every 5 min.
+    // Running state for the tray every 30 s, usage every 5 min, updates 30 s
+    // after start and then daily.
     let handle = app.handle().clone();
     std::thread::spawn(move || {
         #[cfg(windows)]
         let mut last = Default::default();
         for tick in 0u64.. {
+            if tick % 2880 == 1 {
+                tauri::async_runtime::block_on(notify_update(&handle));
+            }
             if tick % 10 == 0 {
                 tauri::async_runtime::block_on(refresh(&handle, None));
             } else {
@@ -586,6 +696,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show_main(app)))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -629,10 +740,17 @@ pub fn run() {
             pending_accounts,
             autostart_enabled,
             set_autostart,
+            session_sharing,
+            set_session_sharing,
+            session_backups,
+            restore_backup,
+            check_and_repair,
+            check_update,
+            install_update,
             quit
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Claude Accounts");
+        .expect("error while running Seatdeck");
 }
 
 #[cfg(test)]

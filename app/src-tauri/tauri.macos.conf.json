@@ -3,7 +3,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Claude Accounts",
+        "title": "Seatdeck",
         "width": 380,
         "height": 520,
         "visible": false,
@@ -15,7 +15,10 @@
         "skipTaskbar": true,
         "visibleOnAllWorkspaces": true,
         "windowEffects": {
-          "effects": ["liquidGlassRegular", "popover"],
+          "effects": [
+            "liquidGlassRegular",
+            "popover"
+          ],
           "state": "active",
           "radius": 16
         }

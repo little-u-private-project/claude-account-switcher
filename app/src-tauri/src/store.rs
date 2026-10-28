@@ -93,6 +93,15 @@ pub fn save(account: &Account) -> Result<(), String> {
 pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub best_hotkey: Option<String>,
+    // "shared" or "separate"; unset = shared only for installs from before the
+    // setting existed (the hub folder is there), see session_sharing().
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_sharing: Option<String>,
+    // Why sync turned itself off (shown in the UI until sharing is turned on again).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_sharing_stopped: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
 fn settings_path() -> PathBuf {
@@ -103,9 +112,20 @@ pub fn settings() -> Settings {
     fs::read_to_string(settings_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
-pub fn save_settings(settings: &Settings) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+// Read-modify-write, so one setting never wipes the others.
+pub fn update_settings(change: impl FnOnce(&mut Settings)) -> Result<(), String> {
+    let mut settings = settings();
+    change(&mut settings);
+    fs::create_dir_all(accounts_dir()).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     fs::write(settings_path(), json).map_err(|e| e.to_string())
+}
+
+pub fn session_sharing() -> bool {
+    match settings().session_sharing.as_deref() {
+        Some(mode) => mode == "shared",
+        None => crate::sessions::hub().exists(),
+    }
 }
 
 // A not-yet-saved account: a folder without meta.json, until sign-in is
