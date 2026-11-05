@@ -71,17 +71,19 @@ fn ms(t: SystemTime) -> u64 {
 
 // What a session entry must look like for copying it to be safe. A Claude
 // Desktop update that changes the format stops sync instead of spreading
-// files this app no longer understands.
+// files this app no longer understands. No cliSessionId is not a format
+// change: a session cut short before its CLI started never gets one.
 pub fn expected_shape(v: &Value) -> bool {
-    v.is_object() && v["cliSessionId"].is_string() && v["cwd"].is_string()
+    v.is_object() && v["cwd"].is_string()
 }
 
 pub struct Entry {
     pub name: String,
     pub path: PathBuf,
     pub modified: u64,
-    // false = not valid JSON (Desktop may be writing it right now): counts as
-    // present, but is not copied this time.
+    // false = not valid JSON (Desktop may be writing it right now) or no
+    // cliSessionId yet (nothing to resume): counts as present, but is not
+    // copied this time.
     pub readable: bool,
 }
 
@@ -99,7 +101,8 @@ pub fn entries(dir: &Path) -> Result<Vec<Entry>, String> {
         if parsed.as_ref().is_some_and(|v| !expected_shape(v)) {
             return Err(format!("{} has an unexpected format", e.path().display()));
         }
-        out.push(Entry { name, path: e.path(), modified, readable: parsed.is_some() });
+        let readable = parsed.is_some_and(|v| v["cliSessionId"].is_string());
+        out.push(Entry { name, path: e.path(), modified, readable });
     }
     Ok(out)
 }
@@ -505,6 +508,11 @@ mod tests {
             sync("a").unwrap();
         }
         assert_eq!(list_backups().len(), KEEP_BACKUPS);
+
+        // A session cut short before its CLI started (no cliSessionId) is skipped, not fatal.
+        write(org("b").join("local_cut.json"), r#"{"cwd":"F:\\w"}"#);
+        sync("a").unwrap();
+        assert!(!org("a").join("local_cut.json").exists(), "session without cliSessionId was copied");
 
         // An entry of an unknown format stops sharing instead of spreading it.
         crate::store::update_settings(|s| s.session_sharing = Some("shared".into())).unwrap();

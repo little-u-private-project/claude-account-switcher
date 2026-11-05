@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "seatdeck-cli"
-version = "4.3.0"
+version = "4.3.1"
 dependencies = [
  "serde_json",
  "ureq",
