@@ -319,18 +319,43 @@ async fn add_poll(id: String) -> Result<Option<String>, String> {
         return Err("not a pending account".into());
     }
     let dir = store::user_data_dir(&id)?;
+    // ponytail: Windows only - macOS routes claude:// by Apple Event, not yet seen misrouted.
+    #[cfg(windows)]
+    {
+        let since = id.trim_start_matches("acct-").parse::<u64>().unwrap_or(0) / 1000;
+        for url in claude::take_login_links(since) {
+            claude::hand_link(&dir, &url)?;
+        }
+    }
     if token::access_token(&dir).is_err() {
-        return Ok(None);
+        return if token::signed_in(&dir) { Err(token::NO_APP_TOKEN.into()) } else { Ok(None) };
     }
     // Signed in: a failed lookup (offline right after login) is an error, not
     // "not signed in" - that answer gets a leftover add's folder deleted.
     let email = token::email(&dir).await?;
+    save_new(id, email.clone(), false)?;
+    Ok(Some(email))
+}
+
+// Free plan: signed in without an app token, so the user types the email.
+#[tauri::command]
+async fn add_save(id: String, email: String) -> Result<(), String> {
+    if !store::is_pending(&id) {
+        return Err("not a pending account".into());
+    }
+    let email = email.trim();
+    if !email.contains('@') {
+        return Err(format!("{email} is not an email address"));
+    }
+    save_new(id, email.into(), true)
+}
+
+fn save_new(id: String, email: String, free: bool) -> Result<(), String> {
     if let Some(existing) = store::list().into_iter().find(|a| a.meta.email.eq_ignore_ascii_case(&email)) {
         let name = existing.meta.display_name.unwrap_or(existing.meta.email);
         return Err(format!("{email} is already saved ({name}) - cancel this one"));
     }
-    store::save(&store::Account { id, meta: store::Meta { email: email.clone(), ..Default::default() } })?;
-    Ok(Some(email))
+    store::save(&store::Account { id, meta: store::Meta { email, free, ..Default::default() } })
 }
 
 // Unfinished adds as (id, still running).
@@ -736,6 +761,7 @@ pub fn run() {
             set_hotkey,
             add_start,
             add_poll,
+            add_save,
             add_cancel,
             pending_accounts,
             autostart_enabled,

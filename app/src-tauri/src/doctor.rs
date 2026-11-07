@@ -51,8 +51,8 @@ pub fn run(fix: bool) -> Vec<Finding> {
         let problem = format!("Unfinished add: {id}");
         if claude::is_running(&sys, &dir) {
             out.push(found(problem, "Its Claude window is still open - sign in there or close it.", false));
-        } else if crate::token::access_token(&dir).is_ok() {
-            out.push(found(problem, "It is signed in - restart Seatdeck to save it.", false));
+        } else if crate::token::access_token(&dir).is_ok() || crate::token::signed_in(&dir) {
+            out.push(found(problem, "It is signed in - open Seatdeck with its window open to save it.", false));
         } else if fix {
             let done = fs::remove_dir_all(store::account_dir(&id).unwrap_or_default()).is_ok();
             out.push(found(problem, if done { "Removed (never signed in)." } else { "Could not remove it." }, done));

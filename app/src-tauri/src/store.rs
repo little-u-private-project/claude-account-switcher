@@ -21,6 +21,9 @@ pub struct Meta {
     // Position in the list (drag order); unordered accounts follow, by email.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<i64>,
+    // Free plan: no app token, so no usage; the email was typed in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub free: bool,
     // Fields older versions wrote (savedAt, sourceRoot, ...) survive a rewrite.
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,

@@ -19,7 +19,10 @@ type UsageState =
   | { state: "ok"; usage: Usage }
   | { state: "signedOut" }
   | { state: "expired" }
+  | { state: "free" }
   | { state: "error"; message: string };
+// token.rs NO_APP_TOKEN
+const NO_APP_TOKEN = "signed in, but this plan gives no app token";
 const COLORS = ["red", "orange", "yellow", "green", "blue", "purple"];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -98,6 +101,8 @@ function render() {
           ? bar("5h", u.usage.five_hour, false) + bar("7d", u.usage.seven_day, true)
           : u.state === "error"
             ? `<div class="usage-err">${esc(u.message)}</div>`
+            : u.state === "free"
+              ? `<div class="usage-err">Free plan · no usage to show</div>`
             : `<div class="signin">${u.state === "signedOut" ? "Signed out · click to sign in" : "Session expired · click to open and refresh"}</div>`;
       const color = a.color && COLORS.includes(a.color) ? ` data-color style="--dot: var(--c-${a.color})"` : "";
       return `<div class="row ${a.running ? "on" : ""}" data-id="${esc(a.id)}"${color} tabindex="0" draggable="true">
@@ -157,6 +162,9 @@ function openDialog(o: DialogOpts): Promise<string | null> {
   input.hidden = o.input === undefined;
   input.value = o.input ?? "";
   input.readOnly = false;
+  input.required = false;
+  input.type = "text";
+  input.placeholder = "";
   $("d-ok").textContent = o.ok ?? "OK";
   $("d-ok").hidden = false;
   $("d-cancel").textContent = o.cancel ?? "Cancel";
@@ -247,6 +255,8 @@ async function addAccount(resumeId?: string) {
   if (!id) return;
   let done = false;
   let stop = false;
+  let free = false;
+  let noToken = 0;
   const p = openDialog({
     title: "Add account",
     text: resumeId
@@ -258,7 +268,8 @@ async function addAccount(resumeId?: string) {
   $("d-ok").hidden = true;
   (async () => {
     while (!stop) {
-      await new Promise((r) => setTimeout(r, 2000));
+      // Short: a misrouted sign-in link must be taken back before that stray Claude uses it.
+      await new Promise((r) => setTimeout(r, 1000));
       if (stop) return;
       try {
         const email = await invoke<string | null>("add_poll", { id });
@@ -271,13 +282,40 @@ async function addAccount(resumeId?: string) {
           return;
         }
       } catch (e) {
+        // Signed in without a token: a paid plan gets one within a second or
+        // two of signing in, so only a lasting absence means a Free plan.
+        if (String(e) === NO_APP_TOKEN && ++noToken >= 5) {
+          free = true;
+          $("d-text").textContent =
+            "Signed in. A Free plan gives Seatdeck no token to read the email or usage — type the account's email to save it.";
+          const input = $<HTMLInputElement>("d-input");
+          input.hidden = false;
+          input.type = "email";
+          input.required = true;
+          input.placeholder = "you@example.com";
+          input.focus();
+          $("d-ok").textContent = "Save";
+          $("d-ok").hidden = false;
+          return;
+        }
         // Keep polling: a network blip must not leave Cancel (which deletes) as the only way out.
         $("d-text").textContent = String(e);
       }
     }
   })();
-  await p;
+  const typed = await p;
   stop = true;
+  if (free && typed) {
+    try {
+      await invoke("add_save", { id, email: typed });
+      done = true;
+      refresh().then(() => loadUsage(id));
+    } catch (e) {
+      // Left pending (signed in): offered again at the next start.
+      toast(String(e));
+      return;
+    }
+  }
   if (!done) await call("add_cancel", { id });
 }
 

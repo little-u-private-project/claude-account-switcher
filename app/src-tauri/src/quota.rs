@@ -14,6 +14,7 @@ pub enum UsageState {
     Ok { usage: Value },
     SignedOut,
     Expired,
+    Free,
     Error { message: String },
 }
 
@@ -41,6 +42,7 @@ impl UsageState {
             }
             UsageState::SignedOut => "sign in needed".into(),
             UsageState::Expired => "open to refresh".into(),
+            UsageState::Free => "Free plan".into(),
             UsageState::Error { .. } => "usage unavailable".into(),
         }
     }
@@ -54,7 +56,16 @@ pub async fn fetch(id: &str) -> UsageState {
         Err(message) => return UsageState::Error { message },
     };
     match crate::token::usage(&dir).await {
-        Ok(usage) => UsageState::Ok { usage },
+        Ok(usage) => {
+            // Upgraded from Free: a token showed up, so a later loss of it means signed out again.
+            if let Some(mut a) = crate::store::get(id).ok().filter(|a| a.meta.free) {
+                a.meta.free = false;
+                let _ = crate::store::save(&a);
+            }
+            UsageState::Ok { usage }
+        }
+        // A Free account never has a token - that is its normal state, not signed out.
+        Err(e) if e == crate::token::NOT_SIGNED_IN && crate::store::get(id).is_ok_and(|a| a.meta.free) => UsageState::Free,
         Err(e) if e == crate::token::NOT_SIGNED_IN => UsageState::SignedOut,
         Err(e) if e == crate::token::EXPIRED => UsageState::Expired,
         Err(message) => UsageState::Error { message },

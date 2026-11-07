@@ -14,6 +14,13 @@ use std::time::Duration;
 // the API no longer accepts (the account's own Claude refreshes it when opened).
 pub const NOT_SIGNED_IN: &str = "not signed in yet";
 pub const EXPIRED: &str = "signed-out or expired - open the account to refresh";
+// Signed in, but the server refuses the app token (403) - a Free plan.
+pub const NO_APP_TOKEN: &str = "signed in, but this plan gives no app token";
+
+// Claude records the account once signed in, token or not.
+pub fn signed_in(user_data_dir: &Path) -> bool {
+    read_json(&user_data_dir.join("config.json")).is_ok_and(|c| c["lastKnownAccountUuid"].as_str().is_some_and(|s| !s.is_empty()))
+}
 
 // One client so requests to api.anthropic.com reuse the connection.
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {

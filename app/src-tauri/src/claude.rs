@@ -105,6 +105,40 @@ pub fn default_instances(sys: &System, since: u64) -> HashSet<Pid> {
         .collect()
 }
 
+// Windows hands the claude:// callback of a browser sign-in to a fresh Claude
+// on the default profile, never to the instance being added. Stops those
+// (started at or after `since`) and returns their login links.
+#[cfg(windows)]
+pub fn take_login_links(since: u64) -> Vec<String> {
+    let sys = snapshot();
+    let mut urls = vec![];
+    let own: HashSet<Pid> = default_instances(&sys, since)
+        .into_iter()
+        .filter(|pid| {
+            let url = sys.process(*pid).and_then(|p| {
+                p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).find(|a| a.starts_with("claude://login/"))
+            });
+            url.map(|u| urls.push(u)).is_some()
+        })
+        .collect();
+    kill_trees(&sys, &own);
+    urls
+}
+
+// Electron's single-instance lock passes the link on to the instance already
+// running on that profile.
+#[cfg(windows)]
+pub fn hand_link(user_data_dir: &Path, url: &str) -> Result<(), String> {
+    Command::new(find_exe()?)
+        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+        .arg(url)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(windows)]
 pub fn stop_default(since: u64) {
     let sys = snapshot();
