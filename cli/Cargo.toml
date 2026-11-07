@@ -1,6 +1,6 @@
 [package]
 name = "seatdeck-cli"
-version = "4.3.1"
+version = "4.3.2"
 description = "Switch the account Claude Code (the claude CLI) runs under"
 edition = "2021"
 

@@ -54,7 +54,7 @@
     },
     "createUpdaterArtifacts": true
   },
-  "version": "4.3.1",
+  "version": "4.3.2",
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlBMzRBMDc2MEVDNDM3NjUKUldSbE44UU9kcUEwbXNhRlBPWjR6a2FZbkgzMFpTd2k4OTZhaXIybXdlNnVZNWpwdXJ3aTFkRkMK",
