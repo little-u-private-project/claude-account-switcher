@@ -567,11 +567,33 @@ async function about() {
   });
 }
 
+// macOS: a notification click can open Claude on its default profile (and an
+// ~11 GB download); while an account runs, Seatdeck closes it unless this is off.
+async function toggleCloseDefault() {
+  const on = await invoke<boolean>("close_default_launches");
+  const ok = await openDialog({
+    title: on ? "Allow Claude's default profile?" : "Close stray Claude windows?",
+    text: on
+      ? "Claude windows opened outside Seatdeck (its default profile) will stay open while an account runs. Turn this off only if you use Claude's default profile yourself."
+      : "While an account runs, a Claude window that opens on Claude's default profile - e.g. from clicking an old notification - is closed within a second and your account is brought forward instead.",
+    ok: on ? "Allow it" : "Close them",
+  });
+  if (ok !== null) await call("set_close_default_launches", { on: !on });
+}
+
 const settingsBtn = $<HTMLButtonElement>("settings");
-settingsBtn.addEventListener("click", () =>
+settingsBtn.addEventListener("click", async () =>
   popupMenu(
     [
       [sharing.shared ? "Stop sharing sessions…" : "Share Code-tab sessions…", toggleSharing],
+      ...(isMac
+        ? [
+            [
+              (await invoke<boolean>("close_default_launches")) ? "Allow Claude's default profile…" : "Close stray Claude windows…",
+              toggleCloseDefault,
+            ] as MenuEntry,
+          ]
+        : []),
       ["Restore session backup…", () => restoreMenu(settingsBtn)],
       ["Check & repair…", checkAndRepair],
       ["Check for updates…", checkUpdate],

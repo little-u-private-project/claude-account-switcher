@@ -508,6 +508,56 @@ fn recover_from_update(app: &AppHandle, last: &mut (std::collections::HashSet<St
     });
 }
 
+// macOS: clicking a Claude notification whose instance has quit since (an
+// update relaunch, a restart) starts Claude.app afresh - with no
+// --user-data-dir, so on the default profile, which then downloads its own
+// ~11 GB VM. (A click while the posting instance still runs goes straight to
+// its session.) While an account runs, quit such a launch within a second (before
+// its window or the download) and bring the account forward instead. A default
+// window already open while no account ran is the user's own and left alone.
+// One the user opens on purpose while an account runs is closed too, unless
+// they turned this off (Settings menu) because they use the default profile.
+#[cfg(target_os = "macos")]
+fn redirect_default_launches() {
+    std::thread::spawn(|| {
+        let mut own = std::collections::HashSet::new();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let sys = claude::snapshot();
+            let defaults = claude::default_instances(&sys, 0);
+            let accounts: Vec<String> = store::list().into_iter().filter(|a| running(&sys, &a.id)).map(|a| a.id).collect();
+            if accounts.is_empty() {
+                own = defaults;
+                continue;
+            }
+            own.retain(|p| defaults.contains(p));
+            let stray: std::collections::HashSet<_> = defaults.difference(&own).copied().collect();
+            if stray.is_empty() {
+                continue;
+            }
+            if !close_default_launches() {
+                own.extend(stray);
+                continue;
+            }
+            claude::quit(&sys, &stray);
+            let current = CURRENT.lock().unwrap().clone().filter(|id| accounts.contains(id));
+            if let Ok(dir) = store::user_data_dir(&current.unwrap_or_else(|| accounts[0].clone())) {
+                let _ = claude::launch(&dir);
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn close_default_launches() -> bool {
+    store::settings().close_default_launches.unwrap_or(true)
+}
+
+#[tauri::command]
+fn set_close_default_launches(on: bool) -> Result<(), String> {
+    store::update_settings(|s| s.close_default_launches = Some(on))
+}
+
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
@@ -689,6 +739,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    redirect_default_launches();
+
     // Running state for the tray every 30 s, usage every 5 min, updates 30 s
     // after start and then daily.
     let handle = app.handle().clone();
@@ -766,6 +819,8 @@ pub fn run() {
             pending_accounts,
             autostart_enabled,
             set_autostart,
+            close_default_launches,
+            set_close_default_launches,
             session_sharing,
             set_session_sharing,
             session_backups,

@@ -103,6 +103,10 @@ pub struct Settings {
     // Why sync turned itself off (shown in the UI until sharing is turned on again).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_sharing_stopped: Option<String>,
+    // macOS: close Claude windows that open on the default profile while an
+    // account runs (unset = on), see redirect_default_launches().
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_default_launches: Option<bool>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }

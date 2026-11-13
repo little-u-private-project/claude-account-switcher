@@ -87,7 +87,7 @@ pub fn quit_for_update(user_data_dir: &Path) -> bool {
 
 // Main processes of Claude Desktop on its own default profile (no
 // --user-data-dir) started at or after `since` (unix seconds).
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub fn default_instances(sys: &System, since: u64) -> HashSet<Pid> {
     let Ok(exe) = find_exe() else { return HashSet::new() };
     sys.processes()
@@ -192,13 +192,32 @@ pub fn launch(user_data_dir: &Path) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        let app = ["/Applications/Claude.app".into(), std::env::home_dir().unwrap_or_default().join("Applications/Claude.app")]
-            .into_iter()
-            .find(|p: &PathBuf| p.exists())
-            .ok_or("Claude Desktop is not installed in /Applications")?;
-        Command::new("open").arg("-n").arg("-a").arg(app).arg("--args").arg(arg).spawn().map_err(|e| e.to_string())?;
+        Command::new("open").arg("-n").arg("-a").arg(find_app()?).arg("--args").arg(arg).spawn().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn find_app() -> Result<PathBuf, String> {
+    ["/Applications/Claude.app".into(), std::env::home_dir().unwrap_or_default().join("Applications/Claude.app")]
+        .into_iter()
+        .find(|p: &PathBuf| p.exists())
+        .ok_or_else(|| "Claude Desktop is not installed in /Applications".to_string())
+}
+
+#[cfg(target_os = "macos")]
+pub fn find_exe() -> Result<PathBuf, String> {
+    Ok(find_app()?.join("Contents/MacOS/Claude"))
+}
+
+// Quits the app politely (macOS: its helpers go down with it).
+#[cfg(target_os = "macos")]
+pub fn quit(sys: &System, pids: &HashSet<Pid>) {
+    for pid in pids {
+        if let Some(p) = sys.process(*pid) {
+            p.kill_with(sysinfo::Signal::Term);
+        }
+    }
 }
 
 #[cfg(windows)]
